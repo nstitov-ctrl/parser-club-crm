@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+backend/data/*.db
+backend/data/*.session
+backend/data/*.session-journal
+.env
+*.env
+!.env.example
+.DS_Store
+node_modules/
+
+
+# oh-my-claudecode plugin state
+.omc/

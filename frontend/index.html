@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Парсер объявлений Telegram — CRM</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #8884; font-size: 0.9rem; }
+  input[type=text] { padding: 0.4rem; width: 60%; }
+  button { padding: 0.45rem 0.9rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 0.5rem; align-items: center; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 0.7rem; margin-top: 0.7rem; }
+  .stat { border: 1px solid #8884; border-radius: 8px; padding: 0.6rem 0.8rem; }
+  .stat b { display: block; font-size: 1.3rem; }
+  .status-not_started { color: #888; }
+  .status-in_progress { color: #d08700; }
+  .status-done { color: #2a9d4a; }
+  .error { color: #c0392b; white-space: pre-wrap; }
+  #run-status { margin-top: 0.6rem; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<h1>Парсер объявлений Telegram — CRM</h1>
+
+<h2>Чаты</h2>
+<div class="row">
+  <input id="chat-input" type="text" placeholder="username, ссылка t.me/... или id канала">
+  <button id="add-chat-btn">Добавить</button>
+</div>
+<table>
+  <thead><tr><th>Чат</th><th>Статус</th><th>Просмотрено</th><th>Карточек</th><th></th></tr></thead>
+  <tbody id="chats-body"></tbody>
+</table>
+
+<h2>Запуск</h2>
+<div class="row">
+  <button id="start-btn">Старт (до 50 новых карточек)</button>
+</div>
+<div id="run-status"></div>
+
+<div class="stats" id="stats"></div>
+
+<script>
+const chatsBody = document.getElementById('chats-body');
+const statsEl = document.getElementById('stats');
+const runStatusEl = document.getElementById('run-status');
+const startBtn = document.getElementById('start-btn');
+const addBtn = document.getElementById('add-chat-btn');
+const chatInput = document.getElementById('chat-input');
+
+let pollTimer = null;
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || res.statusText);
+  }
+  return res.json();
+}
+
+function statusLabel(s) {
+  return { not_started: 'не начат', in_progress: 'в процессе', done: 'пройден полностью' }[s] || s;
+}
+
+async function loadChats() {
+  const chats = await api('/api/chats');
+  chatsBody.innerHTML = '';
+  for (const c of chats) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${c.title ? c.title + ' (' + c.identifier + ')' : c.identifier}</td>
+      <td class="status-${c.status}">${statusLabel(c.status)}</td>
+      <td>${c.messages_viewed}</td>
+      <td>${c.cards_collected}</td>
+      <td><button data-id="${c.id}" class="del-btn">Удалить</button></td>
+    `;
+    chatsBody.appendChild(tr);
+  }
+  chatsBody.querySelectorAll('.del-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api('/api/chats/' + btn.dataset.id, { method: 'DELETE' });
+      loadChats();
+    });
+  });
+}
+
+async function refreshStatus() {
+  const s = await api('/api/status');
+  startBtn.disabled = s.running;
+  startBtn.textContent = s.running ? 'Идёт проход…' : 'Старт (до 50 новых карточек)';
+
+  const run = s.latest_run;
+  let runHtml = '';
+  if (run) {
+    runHtml += `Последний проход: статус ${run.status}, карточек собрано за проход: ${run.cards_collected}, сообщений просмотрено за проход: ${run.messages_viewed}`;
+    if (run.error) runHtml += `<div class="error">Ошибка: ${run.error}</div>`;
+  }
+  if (s.active_chat) {
+    runHtml += `<div>Текущий активный чат: ${s.active_chat.title || s.active_chat.identifier}</div>`;
+  } else {
+    runHtml += `<div>Активных чатов не осталось (все пройдены или список пуст)</div>`;
+  }
+  runStatusEl.innerHTML = runHtml;
+
+  statsEl.innerHTML = `
+    <div class="stat"><b>${s.stats.chats_done}/${s.stats.chats_total}</b>чатов пройдено</div>
+    <div class="stat"><b>${s.stats.messages_viewed_total}</b>сообщений просмотрено всего</div>
+    <div class="stat"><b>${s.stats.cards_total}</b>карточек собрано всего</div>
+  `;
+
+  if (s.running) {
+    if (!pollTimer) pollTimer = setInterval(tick, 2000);
+  } else if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    loadChats();
+  }
+}
+
+async function tick() {
+  await refreshStatus();
+  await loadChats();
+}
+
+addBtn.addEventListener('click', async () => {
+  const identifier = chatInput.value.trim();
+  if (!identifier) return;
+  addBtn.disabled = true;
+  try {
+    await api('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier }),
+    });
+    chatInput.value = '';
+    await loadChats();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    addBtn.disabled = false;
+  }
+});
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  try {
+    await api('/api/run', { method: 'POST' });
+  } catch (e) {
+    alert(e.message);
+  }
+  refreshStatus();
+});
+
+loadChats();
+refreshStatus();
+</script>
+</body>
+</html>
