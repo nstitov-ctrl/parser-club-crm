@@ -1,9 +1,9 @@
 .venv/
 __pycache__/
 *.pyc
-backend/data/*.db
-backend/data/*.session
-backend/data/*.session-journal
+# local runtime state: sqlite db, telegram session, google service account key
+# (secrets/private keys — never commit any of this, whatever the filename)
+backend/data/
 .env
 *.env
 !.env.example
@@ -14,5 +14,6 @@ node_modules/
 # oh-my-claudecode plugin state
 .omc/
 
-# claude code local state
-.claude/
+# claude code local state (keep launch.json — useful preview/dev-server config)
+.claude/*
+!.claude/launch.json

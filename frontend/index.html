@@ -39,7 +39,7 @@
 
 <h2>Запуск</h2>
 <div class="row">
-  <button id="start-btn">Старт (до 50 новых карточек)</button>
+  <button id="start-btn">Старт</button>
 </div>
 <div id="run-status"></div>
 
@@ -93,7 +93,7 @@ async function loadChats() {
 async function refreshStatus() {
   const s = await api('/api/status');
   startBtn.disabled = s.running;
-  startBtn.textContent = s.running ? 'Идёт проход…' : 'Старт (до 50 новых карточек)';
+  startBtn.textContent = s.running ? 'Идёт проход…' : `Старт (до ${s.cards_per_run} новых карточек)`;
 
   const run = s.latest_run;
   let runHtml = '';
@@ -140,6 +140,7 @@ addBtn.addEventListener('click', async () => {
     });
     chatInput.value = '';
     await loadChats();
+    await refreshStatus();
   } catch (e) {
     alert(e.message);
   } finally {
