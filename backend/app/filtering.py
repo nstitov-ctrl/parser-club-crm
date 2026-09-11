@@ -66,9 +66,15 @@ _TOOL_SCHEMA = {
             "is_service_ad": {
                 "type": "boolean",
                 "description": (
-                    "true ONLY if the author is offering their own service "
-                    "and inviting the reader to use it (not a question, "
-                    "discussion, repost, or someone else's ad)."
+                    "true ONLY if the post describes the author's own "
+                    "STANDING service, product, or expertise (something you "
+                    "can order/book/ask for at any time), and invites the "
+                    "reader to use it. false for: a question, discussion, "
+                    "repost, someone else's ad, a job/vacancy post, OR a "
+                    "one-off event announcement tied to a specific date "
+                    "(a mastermind, workshop, meetup, party, webinar) — "
+                    "those are events, not a standing service offer, even "
+                    "when hosted by an expert."
                 ),
             },
             "category": {
@@ -113,11 +119,16 @@ _SYSTEM_PROMPT = (
     "Ты помогаешь собирать базу объявлений услуг из Telegram-каналов для "
     "будущего бота-поисковика. Тебе дают текст одного сообщения и известные "
     "данные профиля автора. Определи, является ли сообщение объявлением "
-    "эксперта/предпринимателя/компании о СВОЕЙ услуге с явным предложением "
-    "ей воспользоваться (а не вопросом, обсуждением, репостом чужого "
-    "объявления или новостью). Если да — извлеки поля через инструмент "
-    "extract_service_card. Категорию услуги определяй свободно, без "
-    "фиксированного справочника."
+    "эксперта/предпринимателя/компании о СВОЕЙ ПОСТОЯННОЙ услуге, товаре "
+    "или экспертности — том, что можно заказать/забронировать/спросить в "
+    "любой момент — с явным предложением этим воспользоваться. Это НЕ "
+    "объявление услуги (is_service_ad=false), если это: вопрос, обсуждение, "
+    "репост чужого объявления, вакансия, новость, ИЛИ анонс разового "
+    "мероприятия с конкретной датой (мастермайнд, воркшоп, встреча, "
+    "вечеринка, вебинар) — событие не считается услугой, даже если его "
+    "проводит эксперт. Если сообщение — объявление постоянной услуги, "
+    "извлеки поля через инструмент extract_service_card. Категорию услуги "
+    "определяй свободно, без фиксированного справочника."
 )
 
 

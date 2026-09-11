@@ -8,11 +8,17 @@ All blocking calls (sqlite, the Anthropic HTTP call, the Google Sheets HTTP
 call) run via asyncio.to_thread so a long run never stalls the event loop —
 otherwise Telethon's own network I/O and the /api/status polling endpoint
 would freeze for the whole duration of a run.
+
+Between channels, a random delay is inserted before touching Telegram
+(ban-risk mitigation, user-requested): hammering many different channels
+back-to-back is the pattern that stands out, not reading messages within
+one channel — so the pause sits at channel switches only, not per message.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import random
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,6 +27,10 @@ from app import database, filtering, sheets_writer, telegram_source
 from app.config import settings
 
 _current_task: Optional[asyncio.Task] = None
+
+# Random delay before starting a new channel, seconds (not applied before the
+# very first channel of a run — no prior Telegram activity to space out yet).
+CHAT_SWITCH_DELAY_RANGE = (2, 60)
 
 
 def is_running() -> bool:
@@ -47,12 +57,17 @@ async def _run_pass() -> None:
     # Approximate month->days depth cutoff (TZ §2: "не старше 6 месяцев");
     # exact calendar precision isn't required, per-day granularity is enough.
     cutoff = datetime.now(timezone.utc) - timedelta(days=settings.depth_months * 30)
+    is_first_chat = True
 
     try:
         while cards_collected < settings.cards_per_run:
             chat = await asyncio.to_thread(database.get_next_active_chat)
             if chat is None:
                 break  # no more chats to process (TZ §3.5)
+
+            if not is_first_chat:
+                await asyncio.sleep(random.uniform(*CHAT_SWITCH_DELAY_RANGE))
+            is_first_chat = False
 
             if chat["status"] == "not_started":
                 try:
