@@ -53,14 +53,21 @@ async def resolve_chat_title(identifier: str) -> str:
 
 
 async def iter_new_messages(
-    identifier: str, after_message_id: Optional[int]
+    identifier: str, before_message_id: Optional[int]
 ) -> AsyncIterator[Message]:
-    """Yields messages oldest->newest, starting right after after_message_id
-    (or from the very beginning of the channel history when None)."""
+    """Yields messages newest->oldest (Telegram's natural default order),
+    starting strictly before before_message_id (or from the very latest
+    message in the channel when None).
+
+    This walks backward from "now", matching TZ §3: read messages until one
+    older than the depth cutoff is hit, at which point the whole earlier
+    history can be skipped — a channel active for years would otherwise
+    force reading years of history just to reach the last 6 months if we
+    walked oldest->newest instead."""
     client = await ensure_connected()
     entity = await client.get_entity(identifier)
-    min_id = after_message_id or 0
-    async for message in client.iter_messages(entity, min_id=min_id, reverse=True):
+    offset_id = before_message_id or 0
+    async for message in client.iter_messages(entity, offset_id=offset_id):
         yield message
 
 

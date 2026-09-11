@@ -3,6 +3,11 @@ CARDS_PER_RUN (50) cards, walking chats in order, resuming from the saved
 position, respecting the 6-month depth cutoff, moving to the next chat when
 one is exhausted, and persisting position after every message so a run can
 be safely resumed on the next "Start" click.
+
+All blocking calls (sqlite, the Anthropic HTTP call, the Google Sheets HTTP
+call) run via asyncio.to_thread so a long run never stalls the event loop —
+otherwise Telethon's own network I/O and the /api/status polling endpoint
+would freeze for the whole duration of a run.
 """
 from __future__ import annotations
 
@@ -36,7 +41,7 @@ def _dedup_hash(username: Optional[str], text: str) -> str:
 
 
 async def _run_pass() -> None:
-    run_id = database.create_run()
+    run_id = await asyncio.to_thread(database.create_run)
     cards_collected = 0
     messages_viewed = 0
     # Approximate month->days depth cutoff (TZ §2: "не старше 6 месяцев");
@@ -45,7 +50,7 @@ async def _run_pass() -> None:
 
     try:
         while cards_collected < settings.cards_per_run:
-            chat = database.get_next_active_chat()
+            chat = await asyncio.to_thread(database.get_next_active_chat)
             if chat is None:
                 break  # no more chats to process (TZ §3.5)
 
@@ -54,12 +59,15 @@ async def _run_pass() -> None:
                     title = await telegram_source.resolve_chat_title(chat["identifier"])
                 except Exception:
                     title = chat["identifier"]
-                database.mark_chat_in_progress(chat["id"], title)
+                await asyncio.to_thread(database.mark_chat_in_progress, chat["id"], title)
 
             chat_exhausted = False
-            after_id = chat["last_message_id"]
+            # last_message_id is the OLDEST message processed so far while
+            # walking backward from "now"; resuming continues further back
+            # from there (see telegram_source.iter_new_messages).
+            before_id = chat["last_message_id"]
 
-            async for message in telegram_source.iter_new_messages(chat["identifier"], after_id):
+            async for message in telegram_source.iter_new_messages(chat["identifier"], before_id):
                 if message.date and message.date < cutoff:
                     chat_exhausted = True
                     break
@@ -71,13 +79,16 @@ async def _run_pass() -> None:
 
                 if text and filtering.stage1_passes(text):
                     username, prof_first, prof_last = await telegram_source.get_author(message)
-                    extracted = filtering.classify_and_extract(text, prof_first, prof_last)
+                    extracted = await asyncio.to_thread(
+                        filtering.classify_and_extract, text, prof_first, prof_last
+                    )
                     if extracted and extracted["is_service_ad"]:
                         published_at = message.date.isoformat() if message.date else ""
                         dedup_hash = _dedup_hash(username, text)
                         final_first = extracted["first_name"] or prof_first
                         final_last = extracted["last_name"] or prof_last
-                        inserted = database.insert_card(
+                        inserted = await asyncio.to_thread(
+                            database.insert_card,
                             chat_id=chat["id"],
                             message_id=message.id,
                             nickname=username,
@@ -90,7 +101,8 @@ async def _run_pass() -> None:
                             dedup_hash=dedup_hash,
                         )
                         if inserted:
-                            sheets_writer.append_card(
+                            await asyncio.to_thread(
+                                sheets_writer.append_card,
                                 nickname=username,
                                 first_name=final_first,
                                 last_name=final_last,
@@ -103,26 +115,30 @@ async def _run_pass() -> None:
                             cards_collected += 1
 
                 messages_viewed += 1
-                database.update_chat_position(
+                await asyncio.to_thread(
+                    database.update_chat_position,
                     chat_id=chat["id"],
                     last_message_id=message.id,
                     last_message_date=message.date.isoformat() if message.date else "",
                     messages_viewed_delta=1,
                     cards_collected_delta=1 if card_added else 0,
                 )
-                database.update_run_progress(run_id, cards_collected, messages_viewed)
+                await asyncio.to_thread(
+                    database.update_run_progress, run_id, cards_collected, messages_viewed
+                )
 
                 if cards_collected >= settings.cards_per_run:
                     break
             else:
-                # generator exhausted naturally: reached the newest message,
-                # no more history to read for this chat
+                # generator exhausted naturally: walked all the way back to
+                # the very first message ever posted in the chat — its whole
+                # history is younger than the depth cutoff
                 chat_exhausted = True
 
             if chat_exhausted:
-                database.mark_chat_done(chat["id"])
+                await asyncio.to_thread(database.mark_chat_done, chat["id"])
 
-        database.finish_run(run_id, status="done")
+        await asyncio.to_thread(database.finish_run, run_id, status="done")
     except Exception as exc:  # keep partial progress, surface the error
-        database.finish_run(run_id, status="error", error=str(exc))
+        await asyncio.to_thread(database.finish_run, run_id, status="error", error=str(exc))
         raise

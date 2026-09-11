@@ -13,3 +13,6 @@ node_modules/
 
 # oh-my-claudecode plugin state
 .omc/
+
+# claude code local state
+.claude/
