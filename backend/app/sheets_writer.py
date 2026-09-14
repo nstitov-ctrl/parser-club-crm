@@ -9,6 +9,7 @@ the bot's per-result 👍/👎 buttons):
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 import gspread
@@ -64,9 +65,15 @@ def _get_worksheet() -> gspread.Worksheet:
     if _worksheet is not None:
         return _worksheet
 
-    creds = Credentials.from_service_account_file(
-        settings.google_service_account_file, scopes=_SCOPES
-    )
+    if settings.google_service_account_json:
+        # Hosted env (e.g. Railway) with no persistent filesystem — key
+        # content comes from the env var directly, no file involved.
+        info = json.loads(settings.google_service_account_json)
+        creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
+    else:
+        creds = Credentials.from_service_account_file(
+            settings.google_service_account_file, scopes=_SCOPES
+        )
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(settings.google_sheet_id)
     try:

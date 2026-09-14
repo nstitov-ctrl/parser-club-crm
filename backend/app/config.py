@@ -35,10 +35,14 @@ class Settings:
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 
-    # Google Sheets
+    # Google Sheets — either a file path (local dev, default) OR the raw JSON
+    # key content in an env var (hosts with no persistent filesystem, e.g.
+    # Railway — set GOOGLE_SERVICE_ACCOUNT_JSON there instead of the file).
+    # sheets_writer.py prefers the JSON env var when both are set.
     google_service_account_file: str = os.getenv(
         "GOOGLE_SERVICE_ACCOUNT_FILE", str(DATA_DIR / "google_service_account.json")
     )
+    google_service_account_json: str = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
     google_sheet_id: str = os.getenv("GOOGLE_SHEET_ID", "")
     google_worksheet_name: str = os.getenv("GOOGLE_WORKSHEET_NAME", "Карточки")
 
