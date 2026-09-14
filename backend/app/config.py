@@ -27,6 +27,10 @@ class Settings:
     telegram_phone: str = os.getenv("TELEGRAM_PHONE", "")
     telegram_session_path: str = str(DATA_DIR / "telegram.session")
 
+    # Telegram Bot API (@CariOra_bot) — data-entry / category-lookup bot,
+    # separate credential from the Telethon user account above
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
     # Anthropic (stage 2 classification/extraction)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")

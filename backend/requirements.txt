@@ -1,6 +1,8 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 telethon==1.36.0
+aiogram==3.22.0
+faster-whisper==1.2.1
 anthropic==0.69.0
 gspread==6.1.2
 google-auth==2.34.0

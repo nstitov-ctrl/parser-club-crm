@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.carioracrm.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-s</string>
+        <string>/Users/nikitatitov/parser club/backend/.venv/bin/python</string>
+        <string>bot_main.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/nikitatitov/parser club/backend</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/nikitatitov/parser club/backend/data/bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/nikitatitov/parser club/backend/data/bot.err.log</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
