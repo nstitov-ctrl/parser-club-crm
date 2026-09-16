@@ -214,6 +214,18 @@ def _as_int(value: object) -> int:
         return 0
 
 
+def _contact_key(card: dict) -> str:
+    """Identity used to dedupe search results — prefers the stable
+    "Ник" (Telegram username on the post) over "Дополнительные контакты",
+    which can vary in formatting/extra links between reposts of the same
+    offer by the same author. Empty string means "can't tell, don't dedupe
+    this one against others"."""
+    nickname = str(card.get("Ник", "")).strip().lower()
+    if nickname:
+        return nickname
+    return str(card.get("Дополнительные контакты", "")).strip().lower()
+
+
 def _match_score(category: str, query: str) -> int:
     """Higher = closer match to the query, for ranking search results so
     the best fits come first when more than _MAX_RESULTS qualify."""
@@ -394,6 +406,19 @@ async def find_category(message: Message, state: FSMContext) -> None:
         return
 
     matches.sort(key=lambda c: -_match_score(str(c.get("Направление", "")).lower(), query))
+    # Same author reposting the same offer (dupes not yet cleaned from the
+    # sheet, or dedup gaps) shouldn't eat multiple result slots — one card
+    # per contact, keeping the best-ranked (already sorted above).
+    seen_contacts: set[str] = set()
+    deduped = []
+    for card in matches:
+        key = _contact_key(card)
+        if key and key in seen_contacts:
+            continue
+        if key:
+            seen_contacts.add(key)
+        deduped.append(card)
+    matches = deduped
     shown = matches[:_MAX_RESULTS]
 
     lines = [f"<b>Найдено: {len(matches)}</b>", ""]
