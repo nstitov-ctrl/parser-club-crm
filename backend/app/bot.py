@@ -120,6 +120,22 @@ def _get_agent_client() -> anthropic.Anthropic:
     return _agent_client
 
 
+_BARE_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{3,31}$")
+
+
+def _format_contact(value: str) -> str:
+    """Telegram usernames sometimes arrive without the leading @ (scraper
+    wrote sender.username raw, pre-fix rows; the bot's manual-add flow
+    always prefixed it) — normalize every comma-separated piece so a bare
+    username always shows with @. Links/phones/anything else pass through
+    untouched (they don't match the username shape)."""
+    parts = [p.strip() for p in value.split(",")]
+    return ", ".join(
+        f"@{p}" if p and not p.startswith("@") and _BARE_USERNAME_RE.match(p) else p
+        for p in parts
+    )
+
+
 def _one_line(text: str, limit: int = _SUMMARY_LIMIT) -> str:
     """Deterministic fallback only (truncation, not a real summary) — used
     when _summarize_ad's Haiku call fails, so search never breaks."""
@@ -429,7 +445,8 @@ async def find_category(message: Message, state: FSMContext) -> None:
         )
         category = str(card.get("Направление", ""))
         summary = _summarize_ad(str(card.get("Оригинальный текст объявления", "")))
-        contact = card.get("Дополнительные контакты") or card.get("Ник") or "—"
+        contact_raw = str(card.get("Дополнительные контакты") or card.get("Ник") or "—")
+        contact = _format_contact(contact_raw)
 
         line = (
             f"{i}. <b>{html.escape(name)}</b> ({html.escape(category)}) — "

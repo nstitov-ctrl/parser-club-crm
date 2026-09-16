@@ -172,13 +172,15 @@ def author_category_exists(nickname: Optional[str], category: Optional[str]) -> 
     category). Skipped (returns False) when either side is empty, so cards
     with no nickname/category never collide with each other on that basis
     alone."""
-    nickname = (nickname or "").strip().lower()
+    nickname = (nickname or "").strip().lower().lstrip("@")
     category = (category or "").strip().lower()
     if not nickname or not category:
         return False
     with get_conn() as conn:
+        # LTRIM(..., '@') so old rows saved without the leading @ (pre-fix)
+        # still match against a now-@-prefixed nickname, and vice versa.
         row = conn.execute(
-            "SELECT 1 FROM cards WHERE LOWER(TRIM(nickname)) = ? "
+            "SELECT 1 FROM cards WHERE LTRIM(LOWER(TRIM(nickname)), '@') = ? "
             "AND LOWER(TRIM(category)) = ? LIMIT 1",
             (nickname, category),
         ).fetchone()

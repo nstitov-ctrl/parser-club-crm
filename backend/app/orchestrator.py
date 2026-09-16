@@ -94,6 +94,11 @@ async def _run_pass() -> None:
 
                 if text and filtering.stage1_passes(text):
                     username, prof_first, prof_last = await telegram_source.get_author(message)
+                    # Telethon's sender.username has no leading @ — the bot's
+                    # own manual-add flow always writes one, so match that
+                    # convention here too (was the reason contacts showed up
+                    # inconsistently with/without @ in search results).
+                    nickname = f"@{username}" if username else ""
                     extracted = await asyncio.to_thread(
                         filtering.classify_and_extract, text, prof_first, prof_last
                     )
@@ -107,7 +112,7 @@ async def _run_pass() -> None:
                         # text defeats dedup_hash above, but same author +
                         # same category is a reliable "already have this" signal).
                         already_have = await asyncio.to_thread(
-                            database.author_category_exists, username, category
+                            database.author_category_exists, nickname, category
                         )
                         inserted = False
                         if not already_have:
@@ -115,7 +120,7 @@ async def _run_pass() -> None:
                                 database.insert_card,
                                 chat_id=chat["id"],
                                 message_id=message.id,
-                                nickname=username,
+                                nickname=nickname,
                                 first_name=final_first,
                                 last_name=final_last,
                                 category=category,
@@ -127,7 +132,7 @@ async def _run_pass() -> None:
                         if inserted:
                             await asyncio.to_thread(
                                 sheets_writer.append_card,
-                                nickname=username,
+                                nickname=nickname,
                                 first_name=final_first,
                                 last_name=final_last,
                                 category=category,
