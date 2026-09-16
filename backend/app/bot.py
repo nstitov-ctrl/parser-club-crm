@@ -189,18 +189,21 @@ def _pluralize_ru(n: int, one: str, few: str, many: str) -> str:
 
 
 def _feedback_note(positive: int, negative: int) -> str:
-    """'1 положительный отзыв и 5 отрицательных отзывов' — empty string if
-    the card has no feedback yet (nothing shown in that case)."""
+    """'✅ 1 положительный отзыв и ❌ 5 отрицательных отзывов', bold (HTML —
+    caller's message uses parse_mode="HTML") — empty string if the card has
+    no feedback yet (nothing shown in that case)."""
     parts = []
     if positive:
         adj = _pluralize_ru(positive, "положительный", "положительных", "положительных")
         noun = _pluralize_ru(positive, "отзыв", "отзыва", "отзывов")
-        parts.append(f"{positive} {adj} {noun}")
+        parts.append(f"✅ {positive} {adj} {noun}")
     if negative:
         adj = _pluralize_ru(negative, "отрицательный", "отрицательных", "отрицательных")
         noun = _pluralize_ru(negative, "отзыв", "отзыва", "отзывов")
-        parts.append(f"{negative} {adj} {noun}")
-    return " и ".join(parts)
+        parts.append(f"❌ {negative} {adj} {noun}")
+    if not parts:
+        return ""
+    return f"<b>{' и '.join(parts)}</b>"
 
 
 _MARKDOWN_STRIP_RE = re.compile(r"(\*\*|__|[*_`#]+)")
