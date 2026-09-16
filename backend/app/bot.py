@@ -38,6 +38,7 @@ import asyncio
 import datetime as dt
 import html
 import logging
+import re
 from typing import Any, Awaitable, Callable, Optional
 
 import anthropic
@@ -100,9 +101,13 @@ _AGENT_SYSTEM_PROMPT = (
     "сейчас, с количеством карточек в каждой, и вопрос пользователя. "
     "Отвечай ТОЛЬКО на основе присланного списка — никогда не выдумывай "
     "категории или числа, которых там нет. Если список пуст, так и скажи. "
-    "Если пользователь хочет что-то найти или добавить в базу — не пытайся "
-    "сделать это сам, коротко подскажи нажать «🔍 Найти по категории» или "
-    "«➕ Добавить эксперта/товар» в меню. Отвечай кратко, по-русски."
+    "Ты НЕ показываешь сами карточки (контакты, описания) — у тебя их "
+    "просто нет, только список категорий с числами. Если вопрос касается "
+    "существующей категории или похож на попытку что-то найти или "
+    "добавить — всегда заканчивай ответ подсказкой нажать «🔍 Найти по "
+    "категории» (чтобы увидеть сами карточки) или «➕ Добавить "
+    "эксперта/товар». Отвечай кратко, по-русски, БЕЗ markdown-разметки — "
+    "никаких **, _, `, только обычный текст, Telegram его не отрисует."
 )
 
 _agent_client: Optional[anthropic.Anthropic] = None
@@ -180,6 +185,17 @@ def _feedback_note(positive: int, negative: int) -> str:
         noun = _pluralize_ru(negative, "отзыв", "отзыва", "отзывов")
         parts.append(f"{negative} {adj} {noun}")
     return " и ".join(parts)
+
+
+_MARKDOWN_STRIP_RE = re.compile(r"(\*\*|__|[*_`#]+)")
+
+
+def _strip_markdown(text: str) -> str:
+    """Safety net for the freeform agent: the system prompt already says
+    "no markdown", but LLMs don't always obey — strip the common markers
+    so a stray ** doesn't show up literally (bot.answer() has no
+    parse_mode here, so Telegram never renders them anyway)."""
+    return _MARKDOWN_STRIP_RE.sub("", text)
 
 
 def _is_low_credit_error(exc: anthropic.APIError) -> bool:
@@ -521,7 +537,7 @@ async def freeform_question(message: Message) -> None:
 
     text_block = next((b for b in response.content if b.type == "text"), None)
     reply = text_block.text if text_block else "Не разобрал вопрос — жми /start."
-    await message.answer(reply, reply_markup=_MAIN_MENU)
+    await message.answer(_strip_markdown(reply), reply_markup=_MAIN_MENU)
 
 
 async def run() -> None:
