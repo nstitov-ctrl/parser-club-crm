@@ -427,6 +427,10 @@ async def find_category(message: Message, state: FSMContext) -> None:
         lines.append("")
         lines.append(f"Показаны {len(shown)} наиболее подходящих.")
 
+    # Feedback buttons alone left a dead end if none of the 3 results fit —
+    # always offer a fresh search / add right under them.
+    keyboard_rows.extend(_MAIN_MENU.inline_keyboard)
+
     await message.answer(
         "\n".join(lines),
         parse_mode="HTML",
