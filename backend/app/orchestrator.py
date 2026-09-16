@@ -23,7 +23,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from app import database, filtering, sheets_writer, telegram_source
+from app import category_cleanup, database, filtering, sheets_writer, telegram_source
 from app.config import settings
 
 _current_task: Optional[asyncio.Task] = None
@@ -168,6 +168,11 @@ async def _run_pass() -> None:
                 await asyncio.to_thread(database.mark_chat_done, chat["id"])
 
         await asyncio.to_thread(database.finish_run, run_id, status="done")
+        # One cheap Haiku pass over the category list to catch new wording
+        # variants the static alias table doesn't know about yet — never
+        # raises, so a cleanup hiccup doesn't turn a successful run into
+        # an error status.
+        await asyncio.to_thread(category_cleanup.cleanup)
     except Exception as exc:  # keep partial progress, surface the error
         await asyncio.to_thread(database.finish_run, run_id, status="error", error=str(exc))
         raise

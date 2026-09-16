@@ -164,6 +164,15 @@ def append_card(
     )
 
 
+def set_category(row: int, category: str) -> None:
+    """Overwrites the Направление cell for one sheet row — used by the
+    post-run category cleanup pass (category_cleanup.py) to rename cells
+    to a canonical wording."""
+    worksheet = _get_worksheet()
+    col_idx = HEADER.index("Направление") + 1
+    worksheet.update_cell(row, col_idx, category)
+
+
 def add_feedback(row: int, positive: bool) -> None:
     """Increments "Отзывы +" or "Отзывы -" for the card at the given sheet
     row (read-then-write on that single cell — feedback volume is low
