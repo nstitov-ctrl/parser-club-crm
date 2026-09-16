@@ -5,12 +5,16 @@ account). Flows:
   contacts, description) through a short FSM, saved into the same Google
   Sheet the scraper writes to (see sheets_writer.py) so both sources feed
   one shared table.
-- "Найти" — user types a category (free text, matched as a case-insensitive
-  substring against "Направление" — categories aren't from a fixed list,
-  see filtering.py). Reply starts with the real total match count (bold),
-  then at most 3 best-matching cards (fewer if fewer exist), ranked by how
-  closely the category matches the query (exact/prefix beats a loose
-  substring hit). Each shown card is one line: author name (falls back to
+- "Найти" — user types free text describing what they want (not a category
+  name — "нужна татуировка" finds "татуировка" even without literal word
+  overlap). Matched BY MEANING via Claude Haiku against the live category
+  list (_match_categories_semantic) — categories aren't from a fixed list,
+  see filtering.py. Falls back to plain substring matching only if the AI
+  call fails (e.g. no API credit), so search never goes fully dark. Reply
+  starts with the real total match count (bold), then at most 3
+  best-matching cards (fewer if fewer exist), ranked by category
+  relevance as the AI returned it. Each shown card is one line: author name
+  (falls back to
   their "Ник" — the poster's own handle — if no name was extracted), a
   genuine one-line LLM summary of what the ad offers (never a truncated
   slice of the original text), contact, and — if the card already has
@@ -134,6 +138,76 @@ def _format_contact(value: str) -> str:
         f"@{p}" if p and not p.startswith("@") and _BARE_USERNAME_RE.match(p) else p
         for p in parts
     )
+
+
+_CATEGORY_MATCH_SYSTEM_PROMPT = (
+    "Тебе дают список категорий услуг, реально существующих в базе прямо "
+    "сейчас, и поисковый запрос пользователя. Верни те категории — "
+    "дословно из списка — которые подходят запросу ПО СМЫСЛУ, не только "
+    "при точном совпадении слов. Например «нужна татуировка» должно "
+    "найти категорию «татуировка» или «художественная аэрография» "
+    "(близкая техника); «хочу постричься» — «услуги парикмахера»; «где "
+    "выпить с музыкой» — «бар», «ресторан», «промоушн клубов». Не "
+    "выдумывай категории, которых нет в списке. Если ничего разумно не "
+    "подходит — верни пустой список. Отсортируй от самого релевантного к "
+    "менее релевантному."
+)
+
+_CATEGORY_MATCH_TOOL_SCHEMA = {
+    "name": "match_categories",
+    "description": "Selects existing categories relevant to the user's search query, by meaning.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "matched_categories": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Categories from the input list, verbatim, relevant to "
+                    "the query — most relevant first. Empty if nothing fits."
+                ),
+            }
+        },
+        "required": ["matched_categories"],
+    },
+}
+
+
+def _match_categories_semantic(query: str, categories: list[str]) -> Optional[list[str]]:
+    """AI-based category matching by meaning, not substring — e.g. "нужна
+    татуировка" should find "татуировка" even without literal word overlap.
+    Returns None (not []) on API failure so the caller can fall back to
+    plain substring matching rather than showing "nothing found"."""
+    if not categories:
+        return []
+    listing = "\n".join(f"- {c}" for c in categories)
+    try:
+        response = _get_agent_client().messages.create(
+            model=settings.anthropic_model,
+            max_tokens=1000,
+            system=_CATEGORY_MATCH_SYSTEM_PROMPT,
+            tools=[_CATEGORY_MATCH_TOOL_SCHEMA],
+            tool_choice={"type": "tool", "name": "match_categories"},
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Категории:\n{listing}\n\nЗапрос пользователя: {query}",
+                }
+            ],
+        )
+    except anthropic.APIError:
+        logger.exception("semantic category match failed, falling back to substring search")
+        return None
+
+    category_set = set(categories)
+    matched = []
+    for block in response.content:
+        if block.type != "tool_use" or block.name != "match_categories":
+            continue
+        for cat in block.input.get("matched_categories", []):
+            if cat in category_set and cat not in matched:
+                matched.append(cat)
+    return matched
 
 
 def _one_line(text: str, limit: int = _SUMMARY_LIMIT) -> str:
@@ -394,7 +468,8 @@ async def add_save(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_find_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(FindCard.category)
     await callback.message.edit_text(
-        "Какую категорию ищем? (например: «массаж», «юрист»)",
+        "Что ищем? Можно не точным названием категории, а своими словами "
+        "(например: «нужна татуировка», «где постричься», «хочу на вечеринку»)",
         reply_markup=_cancel_keyboard(),
     )
     await callback.answer()
@@ -417,14 +492,25 @@ async def find_category(message: Message, state: FSMContext) -> None:
         )
         return
 
-    matches = [c for c in cards if query in str(c.get("Направление", "")).lower()]
+    categories = sorted({str(c.get("Направление", "")).strip() for c in cards if str(c.get("Направление", "")).strip()})
+    matched_categories = _match_categories_semantic(message.text.strip(), categories)
+
+    if matched_categories is not None:
+        # AI match by meaning — matches list is already in relevance order.
+        rank = {cat: i for i, cat in enumerate(matched_categories)}
+        matches = [c for c in cards if str(c.get("Направление", "")).strip() in rank]
+        matches.sort(key=lambda c: rank[str(c.get("Направление", "")).strip()])
+    else:
+        # AI call failed (e.g. no API credit) — fall back to substring
+        # search on the category text rather than showing nothing.
+        matches = [c for c in cards if query in str(c.get("Направление", "")).lower()]
+        matches.sort(key=lambda c: -_match_score(str(c.get("Направление", "")).lower(), query))
+
     if not matches:
         await message.answer(
-            f"По категории «{message.text.strip()}» пока ничего нет.", reply_markup=_MAIN_MENU
+            f"По запросу «{message.text.strip()}» пока ничего нет.", reply_markup=_MAIN_MENU
         )
         return
-
-    matches.sort(key=lambda c: -_match_score(str(c.get("Направление", "")).lower(), query))
     # Same author reposting the same offer (dupes not yet cleaned from the
     # sheet, or dedup gaps) shouldn't eat multiple result slots — one card
     # per contact, keeping the best-ranked (already sorted above).

@@ -133,20 +133,15 @@ def cleanup() -> int:
         logger.exception("category cleanup: failed to read the sheet, skipping")
         return 0
 
-    changed = 0
+    updates: dict[int, str] = {}
 
     # Pass 1: free, deterministic aliases (known pairs, no API call).
     for card in cards:
         old = str(card.get("Направление", "")).strip()
         new = sheets_writer.normalize_category(old)
         if new and new != old:
-            try:
-                sheets_writer.set_category(card["_row"], new)
-            except Exception:
-                logger.exception("category cleanup: failed to write row %s", card["_row"])
-                continue
+            updates[card["_row"]] = new
             card["Направление"] = new
-            changed += 1
 
     # Pass 2: one cheap LLM call for whatever pass 1 missed (new wordings).
     categories = sorted(
@@ -157,13 +152,19 @@ def cleanup() -> int:
         old = str(card.get("Направление", "")).strip()
         new = mapping.get(old)
         if new and new != old:
-            try:
-                sheets_writer.set_category(card["_row"], new)
-            except Exception:
-                logger.exception("category cleanup: failed to write row %s", card["_row"])
-                continue
-            changed += 1
+            updates[card["_row"]] = new
 
+    # One batched write for everything — set_category() per cell hits the
+    # Sheets API's per-minute write quota once there are dozens of renames
+    # (hit this for real cleaning up ~600 cards).
+    if updates:
+        try:
+            sheets_writer.set_categories_batch(updates)
+        except Exception:
+            logger.exception("category cleanup: batch write failed, nothing renamed this pass")
+            return 0
+
+    changed = len(updates)
     if changed:
         logger.info("category cleanup: renamed %d cells", changed)
     return changed

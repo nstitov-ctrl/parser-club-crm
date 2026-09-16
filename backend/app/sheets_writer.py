@@ -165,12 +165,28 @@ def append_card(
 
 
 def set_category(row: int, category: str) -> None:
-    """Overwrites the Направление cell for one sheet row — used by the
-    post-run category cleanup pass (category_cleanup.py) to rename cells
-    to a canonical wording."""
+    """Overwrites the Направление cell for one sheet row. One HTTP request
+    per call — fine for a single ad-hoc rename, but the Sheets API write
+    quota (per-minute, per-user) is easy to blow through renaming dozens
+    of rows this way. Bulk renames (category_cleanup.py) should use
+    set_categories_batch() instead."""
     worksheet = _get_worksheet()
     col_idx = HEADER.index("Направление") + 1
     worksheet.update_cell(row, col_idx, category)
+
+
+def set_categories_batch(updates: dict[int, str]) -> None:
+    """Renames the Направление cell for many rows in ONE Sheets API call
+    (gspread batches Cell objects into a single values_batch_update
+    request) — set_category() one row at a time hits the per-minute write
+    quota once you're renaming dozens of rows (seen in practice cleaning
+    up ~600 cards)."""
+    if not updates:
+        return
+    worksheet = _get_worksheet()
+    col_idx = HEADER.index("Направление") + 1
+    cells = [gspread.Cell(row=row, col=col_idx, value=value) for row, value in updates.items()]
+    worksheet.update_cells(cells, value_input_option="RAW")
 
 
 def add_feedback(row: int, positive: bool) -> None:
