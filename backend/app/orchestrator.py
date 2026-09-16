@@ -102,26 +102,35 @@ async def _run_pass() -> None:
                         dedup_hash = _dedup_hash(username, text)
                         final_first = extracted["first_name"] or prof_first
                         final_last = extracted["last_name"] or prof_last
-                        inserted = await asyncio.to_thread(
-                            database.insert_card,
-                            chat_id=chat["id"],
-                            message_id=message.id,
-                            nickname=username,
-                            first_name=final_first,
-                            last_name=final_last,
-                            category=extracted["category"],
-                            original_text=text,
-                            extra_contacts=extracted["extra_contacts"],
-                            published_at=published_at,
-                            dedup_hash=dedup_hash,
+                        category = sheets_writer.normalize_category(extracted["category"])
+                        # Catches reposts of the same offer reworded (different
+                        # text defeats dedup_hash above, but same author +
+                        # same category is a reliable "already have this" signal).
+                        already_have = await asyncio.to_thread(
+                            database.author_category_exists, username, category
                         )
+                        inserted = False
+                        if not already_have:
+                            inserted = await asyncio.to_thread(
+                                database.insert_card,
+                                chat_id=chat["id"],
+                                message_id=message.id,
+                                nickname=username,
+                                first_name=final_first,
+                                last_name=final_last,
+                                category=category,
+                                original_text=text,
+                                extra_contacts=extracted["extra_contacts"],
+                                published_at=published_at,
+                                dedup_hash=dedup_hash,
+                            )
                         if inserted:
                             await asyncio.to_thread(
                                 sheets_writer.append_card,
                                 nickname=username,
                                 first_name=final_first,
                                 last_name=final_last,
-                                category=extracted["category"],
+                                category=category,
                                 original_text=text,
                                 extra_contacts=extracted["extra_contacts"],
                                 published_at=published_at,

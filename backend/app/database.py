@@ -165,6 +165,26 @@ def mark_chat_done(chat_id: int) -> None:
 
 # ---- cards -------------------------------------------------------------
 
+def author_category_exists(nickname: Optional[str], category: Optional[str]) -> bool:
+    """True if we already have a card from this exact author in this exact
+    category — catches the case dedup_hash misses: the same person
+    reposting the same offer reworded (different text, same author +
+    category). Skipped (returns False) when either side is empty, so cards
+    with no nickname/category never collide with each other on that basis
+    alone."""
+    nickname = (nickname or "").strip().lower()
+    category = (category or "").strip().lower()
+    if not nickname or not category:
+        return False
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM cards WHERE LOWER(TRIM(nickname)) = ? "
+            "AND LOWER(TRIM(category)) = ? LIMIT 1",
+            (nickname, category),
+        ).fetchone()
+        return row is not None
+
+
 def insert_card(
     chat_id: int,
     message_id: int,
