@@ -48,7 +48,7 @@ class Settings:
 
     # Business rules (from TZ)
     cards_per_run: int = _env_int("CARDS_PER_RUN", 50)
-    depth_months: int = _env_int("DEPTH_MONTHS", 6)
+    depth_months: int = _env_int("DEPTH_MONTHS", 3)
 
     # Storage
     db_path: str = str(DATA_DIR / "app.db")
