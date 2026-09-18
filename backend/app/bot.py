@@ -167,9 +167,13 @@ _CATEGORY_MATCH_SYSTEM_PROMPT = (
     "при точном совпадении слов. Например «нужна татуировка» должно "
     "найти категорию «татуировка» или «художественная аэрография» "
     "(близкая техника); «хочу постричься» — «услуги парикмахера»; «где "
-    "выпить с музыкой» — «бар», «ресторан», «промоушн клубов». Не "
-    "выдумывай категории, которых нет в списке. Если ничего разумно не "
-    "подходит — верни пустой список. Отсортируй от самого релевантного к "
+    "выпить с музыкой» — «бар», «ресторан», «промоушн клубов». БУДЬ "
+    "СТРОГИМ: категория должна реально решать запрос пользователя, а не "
+    "просто иметь общую тему или соседнюю область (например запрос про "
+    "татуировку НЕ подходит под «графический дизайн» или «художник» — "
+    "это другая услуга, а не тату). Не выдумывай категории, которых нет "
+    "в списке. Если ничего по-настоящему не подходит — верни пустой "
+    "список, лучше меньше да точнее. Отсортируй от самого релевантного к "
     "менее релевантному."
 )
 
@@ -205,6 +209,10 @@ def _match_categories_semantic(query: str, categories: list[str]) -> Optional[li
         response = _get_agent_client().messages.create(
             model=settings.anthropic_model,
             max_tokens=1000,
+            temperature=0,  # deterministic, strict matching — default (1.0)
+            # sampling let it occasionally include loosely-related
+            # categories (a tattoo query once returned "графический
+            # дизайн"), varying between otherwise-identical calls.
             system=_CATEGORY_MATCH_SYSTEM_PROMPT,
             tools=[_CATEGORY_MATCH_TOOL_SCHEMA],
             tool_choice={"type": "tool", "name": "match_categories"},
@@ -588,6 +596,7 @@ def _check_forbidden_topic(category: str, name: str, text: str) -> Optional[str]
         response = _get_agent_client().messages.create(
             model=settings.anthropic_model,
             max_tokens=200,
+            temperature=0,  # consistent classification, not a creative task
             system=_FORBIDDEN_CHECK_SYSTEM_PROMPT,
             tools=[_FORBIDDEN_CHECK_TOOL_SCHEMA],
             tool_choice={"type": "tool", "name": "check_forbidden_topic"},
