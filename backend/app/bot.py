@@ -215,7 +215,12 @@ def _match_categories_semantic(query: str, categories: list[str]) -> Optional[li
                 }
             ],
         )
-    except anthropic.APIError:
+    except Exception:
+        # Broad on purpose: an SDK/transport-level failure (e.g. the
+        # UnicodeEncodeError we hit in production building request headers)
+        # isn't an anthropic.APIError and would otherwise propagate
+        # unhandled — the whole point of this fallback is that search
+        # never goes fully dark just because the AI call broke somehow.
         logger.exception("semantic category match failed, falling back to substring search")
         return None
 
@@ -262,7 +267,7 @@ def _summarize_ad(text: str) -> str:
             system=_AD_SUMMARY_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": text}],
         )
-    except anthropic.APIError:
+    except Exception:
         logger.exception("ad summary call failed, falling back to truncation")
         return _one_line(text)
     block = next((b for b in response.content if b.type == "text"), None)
@@ -395,6 +400,17 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "cancel")
 async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("editing"):
+        # Cancel pressed mid single-field edit (from "✏️ Изменить") used to
+        # wipe the WHOLE card back to the main menu — should only back out
+        # of that one field, keeping everything already collected.
+        await state.update_data(editing=False)
+        await state.set_state(AddCard.confirm)
+        text, markup = _confirm_view(data)
+        await callback.message.edit_text(text, reply_markup=markup)
+        await callback.answer()
+        return
     await state.clear()
     await callback.message.edit_text("Отменено.")
     await callback.message.answer("Что дальше?", reply_markup=_MAIN_MENU)
@@ -577,7 +593,7 @@ def _check_forbidden_topic(category: str, name: str, text: str) -> Optional[str]
             tool_choice={"type": "tool", "name": "check_forbidden_topic"},
             messages=[{"role": "user", "content": content}],
         )
-    except anthropic.APIError:
+    except Exception:
         logger.exception("forbidden-topic check failed, allowing save (fail-open)")
         return None
 
@@ -809,7 +825,7 @@ async def freeform_question(message: Message) -> None:
                 }
             ],
         )
-    except anthropic.APIError as exc:
+    except Exception as exc:
         logger.exception("freeform agent call failed")
         # A dead/out-of-credit key looks identical to the user as any other
         # failure otherwise — say plainly what's wrong instead of the old
