@@ -2,9 +2,18 @@
 account). Flows:
 
 - "Добавить" — user dictates an expert/product card (category, name,
-  contacts, description) through a short FSM, saved into the same Google
-  Sheet the scraper writes to (see sheets_writer.py) so both sources feed
-  one shared table.
+  description — no contacts question, contact is always the Telegram
+  handle of whoever is chatting) through a short FSM, saved into the same
+  Google Sheet the scraper writes to (see sheets_writer.py) so both
+  sources feed one shared table. Description capped at _MAX_TEXT_LEN
+  (1000) chars. Before saving, a cheap Haiku call checks the category/
+  name/description against a forbidden-topics list (drugs, escort
+  services, weapons, fraud, etc.) and blocks the save if it matches —
+  fails open (allows the save) if the check itself errors, so an API
+  hiccup never blocks a legitimate submission. The confirm screen has an
+  "✏️ Изменить" button — pick a field, retype it, land back on confirm
+  with the updated summary (catches misheard voice input, e.g. a voiced
+  "Бали" transcribed as "боли").
 - "Найти" — user types free text describing what they want (not a category
   name — "нужна татуировка" finds "татуировка" even without literal word
   overlap). Matched BY MEANING via Claude Haiku against the live category
@@ -77,10 +86,20 @@ async def _voice_transcription_middleware(
     flow below (FSM steps, find, free-form question) can just read
     message.text as usual — it never needs to know voice exists."""
     if event.voice is not None:
-        bot: Bot = data["bot"]
-        file = await bot.get_file(event.voice.file_id)
-        buffer = await bot.download_file(file.file_path)
-        text = await asyncio.to_thread(voice.transcribe, buffer.read())
+        try:
+            bot: Bot = data["bot"]
+            file = await bot.get_file(event.voice.file_id)
+            buffer = await bot.download_file(file.file_path)
+            text = await asyncio.to_thread(voice.transcribe, buffer.read())
+        except Exception:
+            # get_file/download_file aren't wrapped anywhere else — an
+            # unhandled exception here used to propagate out of the
+            # middleware entirely (aiogram just logs it, no reply to the
+            # user at all: looked like "voice message ignored, nothing
+            # happened"). Now it degrades to the same fallback as a failed
+            # transcription instead of going silent.
+            logger.exception("voice download/transcription pipeline failed")
+            text = None
         if not text:
             await event.answer(
                 "Не удалось распознать голосовое — попробуй ещё раз или напиши текстом."
@@ -98,6 +117,7 @@ _MAIN_MENU = InlineKeyboardMarkup(
 
 _MAX_RESULTS = 3
 _SUMMARY_LIMIT = 90  # one-line ad summary shown in search results, in chars
+_MAX_TEXT_LEN = 1000  # cap on the "Добавить" flow's description field
 
 _AGENT_SYSTEM_PROMPT = (
     "Ты — справочный помощник бота CariOra (база экспертов и услуг Бали). "
@@ -342,7 +362,6 @@ def _category_counts(cards: list[dict]) -> list[tuple[str, int]]:
 class AddCard(StatesGroup):
     category = State()
     name = State()
-    contacts = State()
     text = State()
     confirm = State()
 
@@ -395,64 +414,204 @@ async def cb_add_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+def _confirm_view(data: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Renders the "check before saving" screen — shared by the initial
+    pass through the flow and by every return trip from an edit."""
+    text = (
+        "Проверь карточку:\n\n"
+        f"Категория: {data['category']}\n"
+        f"Имя: {data['name']}\n"
+        f"Описание: {data['text']}\n\n"
+        "Контакт: возьмём твой Telegram-ник автоматически.\n\n"
+        "Сохранить?"
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Сохранить", callback_data="save")],
+            [InlineKeyboardButton(text="✏️ Изменить", callback_data="edit")],
+            [InlineKeyboardButton(text="✖ Отмена", callback_data="cancel")],
+        ]
+    )
+    return text, markup
+
+
+async def _collect_field(
+    message: Message,
+    state: FSMContext,
+    field: str,
+    value: str,
+    next_state: State,
+    next_prompt: str,
+) -> None:
+    """Stores one field. If this was reached via the "✏️ Изменить" flow
+    (data["editing"] set), jumps straight back to the confirm screen
+    instead of continuing the linear category→name→text sequence."""
+    prior = await state.get_data()
+    editing = bool(prior.get("editing"))
+    data = await state.update_data(**{field: value}, editing=False)
+    if editing:
+        await state.set_state(AddCard.confirm)
+        text, markup = _confirm_view(data)
+        await message.answer(text, reply_markup=markup)
+    else:
+        await state.set_state(next_state)
+        await message.answer(next_prompt, reply_markup=_cancel_keyboard())
+
+
 @router.message(AddCard.category)
 async def add_category(message: Message, state: FSMContext) -> None:
-    await state.update_data(category=message.text.strip())
-    await state.set_state(AddCard.name)
-    await message.answer("Имя и фамилия эксперта (или название товара/бренда)?", reply_markup=_cancel_keyboard())
+    await _collect_field(
+        message, state, "category", message.text.strip(),
+        AddCard.name, "Имя и фамилия эксперта (или название товара/бренда)?",
+    )
 
 
 @router.message(AddCard.name)
 async def add_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(name=message.text.strip())
-    await state.set_state(AddCard.contacts)
-    await message.answer(
-        "Контакты для связи (телефон / ссылка / другой мессенджер)?",
-        reply_markup=_cancel_keyboard(),
-    )
-
-
-@router.message(AddCard.contacts)
-async def add_contacts(message: Message, state: FSMContext) -> None:
-    await state.update_data(contacts=message.text.strip())
-    await state.set_state(AddCard.text)
-    await message.answer(
-        "Короткое описание услуги/товара — то, что увидят в поиске?",
-        reply_markup=_cancel_keyboard(),
+    await _collect_field(
+        message, state, "name", message.text.strip(),
+        AddCard.text,
+        f"Короткое описание услуги/товара — то, что увидят в поиске? "
+        f"(до {_MAX_TEXT_LEN} символов)",
     )
 
 
 @router.message(AddCard.text)
 async def add_text(message: Message, state: FSMContext) -> None:
-    data = await state.update_data(text=message.text.strip())
+    text = message.text.strip()
+    if len(text) > _MAX_TEXT_LEN:
+        await message.answer(
+            f"Слишком длинно ({len(text)} символов, максимум {_MAX_TEXT_LEN}) — "
+            "сократи и пришли ещё раз.",
+            reply_markup=_cancel_keyboard(),
+        )
+        return
+    # Always lands on the confirm screen regardless of the editing flag —
+    # text is the last field in the linear order, so there's no "next
+    # question" branch to take here, unlike category/name.
+    data = await state.update_data(text=text, editing=False)
     await state.set_state(AddCard.confirm)
-    await message.answer(
-        "Проверь карточку:\n\n"
-        f"Категория: {data['category']}\n"
-        f"Имя: {data['name']}\n"
-        f"Контакты: {data['contacts']}\n"
-        f"Описание: {data['text']}\n\n"
-        "Сохранить?",
+    view_text, markup = _confirm_view(data)
+    await message.answer(view_text, reply_markup=markup)
+
+
+_EDIT_FIELD_PROMPTS = {
+    "category": ("Новая категория?", AddCard.category),
+    "name": ("Новое имя/название?", AddCard.name),
+    "text": (f"Новое описание (до {_MAX_TEXT_LEN} символов)?", AddCard.text),
+}
+
+
+@router.callback_query(AddCard.confirm, F.data == "edit")
+async def cb_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text(
+        "Что исправить?",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Сохранить", callback_data="save")],
+                [InlineKeyboardButton(text="Категория", callback_data="editfield:category")],
+                [InlineKeyboardButton(text="Имя/название", callback_data="editfield:name")],
+                [InlineKeyboardButton(text="Описание", callback_data="editfield:text")],
                 [InlineKeyboardButton(text="✖ Отмена", callback_data="cancel")],
             ]
         ),
     )
+    await callback.answer()
+
+
+@router.callback_query(AddCard.confirm, F.data.startswith("editfield:"))
+async def cb_edit_field(callback: CallbackQuery, state: FSMContext) -> None:
+    field = (callback.data or "").split(":", 1)[1]
+    entry = _EDIT_FIELD_PROMPTS.get(field)
+    if entry is None:
+        await callback.answer()
+        return
+    prompt, target_state = entry
+    await state.update_data(editing=True)
+    await state.set_state(target_state)
+    await callback.message.edit_text(prompt, reply_markup=_cancel_keyboard())
+    await callback.answer()
+
+
+_FORBIDDEN_CHECK_SYSTEM_PROMPT = (
+    "Проверь карточку эксперта/товара для CRM на запрещённые темы: "
+    "наркотики и психоактивные вещества, эскорт/интим-услуги/проституция, "
+    "оружие/боеприпасы/взрывчатка, поддельные документы, финансовые "
+    "пирамиды и явное мошенничество, экстремистские материалы, услуги "
+    "сексуального характера в отношении несовершеннолетних, торговля "
+    "краденым, взлом систем/аккаунтов. Обычные легальные услуги (массаж, "
+    "психология, бизнес-консультации, аренда, обучение, тантра, "
+    "телесные практики и т.д.) НЕ запрещены, даже если тема деликатная — "
+    "запрещай только явные, недвусмысленные случаи. Если сомневаешься — "
+    "считай, что НЕ запрещено (пропускай пограничные случаи)."
+)
+
+_FORBIDDEN_CHECK_TOOL_SCHEMA = {
+    "name": "check_forbidden_topic",
+    "description": "Flags whether a service/product card touches a forbidden topic.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "is_forbidden": {"type": "boolean"},
+            "reason": {
+                "type": "string",
+                "description": "Short Russian reason (a few words) if forbidden, empty string otherwise.",
+            },
+        },
+        "required": ["is_forbidden", "reason"],
+    },
+}
+
+
+def _check_forbidden_topic(category: str, name: str, text: str) -> Optional[str]:
+    """Returns a short reason string if the card touches a forbidden
+    topic, or None if it's fine OR the check itself failed. Fails open —
+    a Haiku hiccup shouldn't block a legitimate submission, consistent
+    with the "no moderation queue" design used everywhere else here."""
+    content = f"Категория: {category}\nИмя/название: {name}\nОписание: {text}"
+    try:
+        response = _get_agent_client().messages.create(
+            model=settings.anthropic_model,
+            max_tokens=200,
+            system=_FORBIDDEN_CHECK_SYSTEM_PROMPT,
+            tools=[_FORBIDDEN_CHECK_TOOL_SCHEMA],
+            tool_choice={"type": "tool", "name": "check_forbidden_topic"},
+            messages=[{"role": "user", "content": content}],
+        )
+    except anthropic.APIError:
+        logger.exception("forbidden-topic check failed, allowing save (fail-open)")
+        return None
+
+    for block in response.content:
+        if block.type == "tool_use" and block.name == "check_forbidden_topic":
+            if block.input.get("is_forbidden"):
+                return str(block.input.get("reason") or "запрещённая тема")
+    return None
 
 
 @router.callback_query(AddCard.confirm, F.data == "save")
 async def add_save(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     username = callback.from_user.username or ""
+    nickname = f"@{username}" if username else ""
+
+    forbidden_reason = _check_forbidden_topic(data["category"], data["name"], data["text"])
+    if forbidden_reason:
+        await state.clear()
+        await callback.message.edit_text(
+            f"Не могу сохранить — похоже на запрещённую тему ({html.escape(forbidden_reason)}). "
+            "Если это ошибка — переформулируй и добавь заново."
+        )
+        await callback.message.answer("Что дальше?", reply_markup=_MAIN_MENU)
+        await callback.answer()
+        return
+
     sheets_writer.append_card(
-        nickname=f"@{username}" if username else "",
+        nickname=nickname,
         first_name=data["name"],
         last_name="",
         category=data["category"],
         original_text=data["text"],
-        extra_contacts=data["contacts"],
+        extra_contacts="",
         published_at=dt.date.today().isoformat(),
     )
     await state.clear()
