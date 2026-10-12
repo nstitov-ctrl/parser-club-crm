@@ -37,11 +37,20 @@ def is_running() -> bool:
     return _current_task is not None and not _current_task.done()
 
 
-def start_run_background() -> None:
+def start_run_background(
+    depth_days: Optional[int] = None,
+    cards_limit: Optional[int] = None,
+    rescan: bool = False,
+) -> None:
+    """depth_days: how far back to read (default: DEPTH_MONTHS * 30).
+    cards_limit: stop after this many new cards; None = CARDS_PER_RUN,
+    0 = no limit. rescan: send all chats back to the newest message first."""
     global _current_task
     if is_running():
         raise RuntimeError("Проход уже выполняется")
-    _current_task = asyncio.create_task(_run_pass())
+    if rescan:
+        database.reset_chats_for_rescan()
+    _current_task = asyncio.create_task(_run_pass(depth_days, cards_limit))
 
 
 def _dedup_hash(username: Optional[str], text: str) -> str:
@@ -50,17 +59,24 @@ def _dedup_hash(username: Optional[str], text: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-async def _run_pass() -> None:
+async def _run_pass(
+    depth_days: Optional[int] = None, cards_limit: Optional[int] = None
+) -> None:
     run_id = await asyncio.to_thread(database.create_run)
     cards_collected = 0
     messages_viewed = 0
     # Approximate month->days depth cutoff (TZ §2: "не старше 6 месяцев");
     # exact calendar precision isn't required, per-day granularity is enough.
-    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.depth_months * 30)
+    days = depth_days or settings.depth_months * 30
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    limit = settings.cards_per_run if cards_limit is None else cards_limit  # 0 = no limit
     is_first_chat = True
 
+    def limit_reached() -> bool:
+        return limit > 0 and cards_collected >= limit
+
     try:
-        while cards_collected < settings.cards_per_run:
+        while not limit_reached():
             chat = await asyncio.to_thread(database.get_next_active_chat)
             if chat is None:
                 break  # no more chats to process (TZ §3.5)
@@ -93,7 +109,7 @@ async def _run_pass() -> None:
                 card_added = False
 
                 if text and filtering.stage1_passes(text):
-                    username, prof_first, prof_last = await telegram_source.get_author(message)
+                    username, prof_first, prof_last, author_id = await telegram_source.get_author(message)
                     # Telethon's sender.username has no leading @ — the bot's
                     # own manual-add flow always writes one, so match that
                     # convention here too (was the reason contacts showed up
@@ -139,6 +155,7 @@ async def _run_pass() -> None:
                                 original_text=text,
                                 extra_contacts=extracted["extra_contacts"],
                                 published_at=published_at,
+                                author_id=author_id,
                             )
                             card_added = True
                             cards_collected += 1
@@ -156,7 +173,7 @@ async def _run_pass() -> None:
                     database.update_run_progress, run_id, cards_collected, messages_viewed
                 )
 
-                if cards_collected >= settings.cards_per_run:
+                if limit_reached():
                     break
             else:
                 # generator exhausted naturally: walked all the way back to

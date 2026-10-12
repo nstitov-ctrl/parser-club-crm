@@ -155,6 +155,18 @@ def update_chat_position(
         )
 
 
+def reset_chats_for_rescan() -> None:
+    """Send every chat back to the start of its history for a fresh pass.
+    Totals (messages_viewed / cards_collected) are kept; dedup by hash and
+    by author+category keeps already-collected cards from being added twice."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE chats SET status = 'not_started', last_message_id = NULL, "
+            "last_message_date = NULL, updated_at = ?",
+            (_now(),),
+        )
+
+
 def mark_chat_done(chat_id: int) -> None:
     with get_conn() as conn:
         conn.execute(

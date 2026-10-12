@@ -71,14 +71,16 @@ async def iter_new_messages(
         yield message
 
 
-async def get_author(message: Message) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Returns (username, first_name, last_name) of the message sender.
-    Falls back to the channel's own username if the message has no user
-    sender (e.g. posted as the channel)."""
+async def get_author(
+    message: Message,
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[int]]:
+    """Returns (username, first_name, last_name, user_id) of the message
+    sender. user_id is the stable numeric Telegram ID — it survives username
+    changes, which is what the self-vote check relies on."""
     sender = await message.get_sender()
     if sender is None:
-        return None, None, None
+        return None, None, None, None
     username = getattr(sender, "username", None)
     first_name = getattr(sender, "first_name", None)
     last_name = getattr(sender, "last_name", None)
-    return username, first_name, last_name
+    return username, first_name, last_name, getattr(sender, "id", None)

@@ -15,6 +15,7 @@ from typing import Optional
 import gspread
 from google.oauth2.service_account import Credentials
 
+from app import votes
 from app.config import settings
 
 _SCOPES = [
@@ -31,6 +32,9 @@ HEADER = [
     "Дата публикации",
     "Отзывы +",
     "Отзывы -",
+    # Numeric Telegram ID of the card's author — lets the voting rules block
+    # self-votes even if the @username changes (see app/votes.py).
+    "ID автора",
 ]
 
 # Known "same category, different wording" variants seen in the sheet —
@@ -42,13 +46,51 @@ HEADER = [
 CATEGORY_ALIASES = {
     "доставка рационов правильного питания": "доставка рационов питания",
     "доставка готовых рационов питания": "доставка рационов питания",
-    "членство в бизнес-клубе": "бизнес-клуб",
+    "членство в бизнес-клубе": "Бизнес-клуб и нетворкинг",
     "клиническая психология": "психология",
     "звуковое исцеление, звуковая терапия": "звуковая терапия",
     "преподавание игры на ханге": "обучение игре на ханге",
     "открытие банковского счета": "открытие банковских счетов в Индонезии",
-    "аренда автомобилей и мотоциклов": "аренда автомобилей",
-    "аренда мотоциклов": "аренда автомобилей",
+    "аренда автомобилей и мотоциклов": "Аренда байков и автомобилей",
+    "аренда мотоциклов": "Аренда байков и автомобилей",
+    "аренда автомобилей": "Аренда байков и автомобилей",
+    "аренда скутеров и мотоциклов": "Аренда байков и автомобилей",
+    # Oct 2026 hand-curated pass over the 149 live categories (see
+    # data/sheet_backup_*.json for the pre-merge snapshot) — only literal
+    # wording variants of the same service, no broad-topic merging.
+    "обучение языкам": "Обучение иностранным языкам",
+    "индивидуальное обучение языкам": "Обучение иностранным языкам",
+    "обучение онлайн, иностранные языки": "Обучение иностранным языкам",
+    "обучение языку / переводы": "Обучение языкам и переводы",
+    "обучение языку, переводы": "Обучение языкам и переводы",
+    "преподавание китайского языка онлайн": "Обучение китайскому языку",
+    "аренда вилл": "Аренда вилл и апартаментов",
+    "аренда апартаментов": "Аренда вилл и апартаментов",
+    "аренда барбершопа": "Аренда коммерческого помещения",
+    "услуги личного шеф-повара": "Услуги частного повара",
+    "букеты с ягодами в шоколаде": "Сладости и шоколадные подарки",
+    "продажа клубники в шоколаде": "Сладости и шоколадные подарки",
+    "продажа сладостей и шоколадных конфет": "Сладости и шоколадные подарки",
+    "продажа шоколадных изделий": "Сладости и шоколадные подарки",
+    "продажа рыбы": "Продажа рыбы и мяса",
+    "продажа конины и мясных изделий": "Продажа рыбы и мяса",
+    "уборка дома": "Клининг вилл и апартаментов",
+    "домработница, уборка": "Клининг вилл и апартаментов",
+    "подростковая психология": "Услуги психолога",
+    "косметическое масло": "Косметика и пептиды",
+    "поставка пептидов и косметики": "Косметика и пептиды",
+    "ai ассистент с памятью": "Разработка веб и AI приложений",
+    "управление проектами, разработка mvp и ai-инструментов": "Разработка веб и AI приложений",
+    "реклама на такси": "Рекламные услуги",
+    "бизнес-клуб": "Бизнес-клуб и нетворкинг",
+    "профессиональный нетворкинг": "Бизнес-клуб и нетворкинг",
+    "организация событий": "Организация мероприятий",
+    "платформа для публикации мероприятий": "Организация мероприятий",
+    "дисконтная программа, программа лояльности": "Программы лояльности",
+    "программа лояльности и партнерские сервисы": "Программы лояльности",
+    "интервью и контент-партнёрство": "Создание подкастов и медиа",
+    "консультация при покупке бизнеса": "Консалтинг и аналитика",
+    "продажа одежды и купальников": "Розница одежды и аксессуаров",
     # "клубы" cluster — 15 different wordings for one service (get into a
     # club / book a table / guest list), canonicalized to the most common
     # existing label so counts stop fragmenting.
@@ -80,8 +122,11 @@ def normalize_category(category: Optional[str]) -> str:
     flow keep the category list from fragmenting over time."""
     if not category:
         return ""
-    stripped = category.strip()
-    return CATEGORY_ALIASES.get(stripped.lower(), stripped)
+    stripped = " ".join(category.split())  # also collapses stray double spaces
+    canonical = CATEGORY_ALIASES.get(stripped.lower(), stripped)
+    # Consistent look in the bot / mini app: sentence case, first letter up
+    # (the sheet had a mix of "проходки в клубы" and "Аренда байков…").
+    return canonical[:1].upper() + canonical[1:]
 
 
 _worksheet: Optional[gspread.Worksheet] = None
@@ -146,6 +191,7 @@ def append_card(
     original_text: str,
     extra_contacts: Optional[str],
     published_at: Optional[str],
+    author_id: Optional[int] = None,
 ) -> None:
     worksheet = _get_worksheet()
     worksheet.append_row(
@@ -159,6 +205,7 @@ def append_card(
             published_at or "",
             0,
             0,
+            author_id or "",
         ],
         value_input_option="RAW",
     )
@@ -189,16 +236,14 @@ def set_categories_batch(updates: dict[int, str]) -> None:
     worksheet.update_cells(cells, value_input_option="RAW")
 
 
-def add_feedback(row: int, positive: bool) -> None:
-    """Increments "Отзывы +" or "Отзывы -" for the card at the given sheet
-    row (read-then-write on that single cell — feedback volume is low
-    enough that the race window doesn't matter in practice)."""
-    worksheet = _get_worksheet()
-    column_name = "Отзывы +" if positive else "Отзывы -"
-    col_idx = HEADER.index(column_name) + 1
-    current_raw = worksheet.cell(row, col_idx).value
-    try:
-        current = int(current_raw) if current_raw else 0
-    except ValueError:
-        current = 0
-    worksheet.update_cell(row, col_idx, current + 1)
+_ledger: Optional[votes.Ledger] = None
+
+
+def get_ledger() -> votes.Ledger:
+    """Vote/contact ledger for this sheet. All votes go through it (app/votes.py) —
+    there is deliberately no bare "+1" writer any more: it had no idea WHO was
+    voting, so authors could vote for themselves and anyone could stack votes."""
+    global _ledger
+    if _ledger is None:
+        _ledger = votes.Ledger(_get_worksheet())
+    return _ledger

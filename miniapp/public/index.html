@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>CariOra — услуги на Бали</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap&subset=cyrillic" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1B2015;
+    --ink-soft: #6C6847;
+    --paper: #FBF3DE;
+    --card: #FFFFFF;
+    --line: #E8DFC4;
+    --marigold: #F2A900;
+    --marigold-deep: #B8790A;
+    --jungle: #1F6F5C;
+    --hibiscus: #E14F64;
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); }
+  body {
+    font-family: 'Montserrat', -apple-system, system-ui, sans-serif;
+    font-size: 15px; line-height: 1.45;
+    padding: 0 16px calc(24px + env(safe-area-inset-bottom));
+    min-height: 100vh;
+  }
+  header { padding: 20px 0 6px; }
+  .brand { font-weight: 800; font-size: 26px; letter-spacing: -0.02em; }
+  .brand span { color: var(--marigold-deep); }
+  .tagline { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+
+  .search {
+    display: flex; gap: 8px; margin: 16px 0 12px; position: sticky; top: 0;
+    padding: 8px 0; background: var(--paper); z-index: 5;
+  }
+  .search input {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; /* 16px stops iOS zoom */
+    padding: 14px 16px; border: 2px solid var(--line); border-radius: 14px;
+    background: var(--card); color: var(--ink); outline: none;
+  }
+  .search input:focus { border-color: var(--marigold); }
+  .btn {
+    font: inherit; font-weight: 700; border: 0; border-radius: 14px; cursor: pointer;
+    padding: 0 18px; background: var(--marigold); color: var(--ink);
+  }
+  .btn:active { transform: scale(0.97); }
+
+  .chips { display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 -16px 4px; padding: 2px 16px 8px;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips.expanded { flex-wrap: wrap; overflow: visible; margin: 0; padding: 2px 0 8px; }
+  .chip {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    padding: 8px 12px; border-radius: 999px; border: 1.5px solid var(--line);
+    background: var(--card); color: var(--ink); white-space: nowrap; flex: none; text-align: left;
+  }
+  .chip small { color: var(--ink-soft); font-weight: 500; margin-left: 4px; }
+  .chip.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .chip.active small { color: #CFC9A8; }
+  .more { font: inherit; font-size: 13px; font-weight: 700; color: var(--jungle); background: none; border: 0; padding: 8px 4px; cursor: pointer; }
+
+  .meta { color: var(--ink-soft); font-size: 13px; margin: 14px 2px 10px; }
+  .meta b { color: var(--ink); }
+
+  .card {
+    background: var(--card); border-radius: var(--radius); padding: 16px;
+    margin-bottom: 12px; border: 1px solid var(--line);
+  }
+  .card-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+  .name { font-weight: 700; font-size: 16px; }
+  .tag {
+    display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 600;
+    color: var(--jungle); background: #E3F1EC; padding: 3px 9px; border-radius: 999px;
+  }
+  .text { margin: 12px 0 4px; white-space: pre-line; word-break: break-word; }
+  .text.clamp { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .toggle { font: inherit; font-size: 13px; font-weight: 700; color: var(--jungle); background: none; border: 0; padding: 4px 0; cursor: pointer; }
+  .contact { margin-top: 10px; font-size: 14px; color: var(--ink-soft); word-break: break-word; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+  .write { padding: 11px 16px; font-size: 14px; text-decoration: none; display: inline-block; }
+  .vote {
+    font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+    padding: 9px 12px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink);
+  }
+  .vote.locked { opacity: 0.45; }
+  .vote.mine { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .more-results { display: block; width: 100%; margin: 4px 0 12px; padding: 14px; font: inherit; font-weight: 700;
+    font-size: 15px; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; cursor: pointer; }
+  .more-results:active { transform: scale(0.99); }
+  .vote-hint { width: 100%; margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+  .spacer { flex: 1; }
+
+  .state { text-align: center; color: var(--ink-soft); padding: 40px 12px; }
+  .state b { display: block; color: var(--ink); font-size: 17px; margin-bottom: 6px; }
+  .skeleton { height: 120px; border-radius: var(--radius); margin-bottom: 12px;
+    background: linear-gradient(90deg, #F1E8CD 25%, #F8F0DB 50%, #F1E8CD 75%); background-size: 200% 100%;
+    animation: shimmer 1.3s infinite; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  body { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+  button, .chip, .btn { -webkit-user-select: none; user-select: none; }
+  .text a, .contact a { color: var(--jungle); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; word-break: normal; }
+  .contact .links { display: block; }
+  .copy { display: inline-block; margin-top: 8px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; padding: 6px 10px;
+    border-radius: 10px; border: 1.5px solid var(--line); background: var(--paper); color: var(--ink); }
+  .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+    background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 12px; font-size: 13px; font-weight: 600;
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 20; }
+  .toast.show { opacity: 1; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Cari<span>Ora</span></div>
+  <div class="tagline">Услуги и специалисты на Бали — самые актуальные предложения острова на основе самых популярных сообществ.</div>
+</header>
+
+<form class="search" id="search-form">
+  <input id="q" type="search" placeholder="Что ищете? Например, «нужна татуировка»" enterkeyhint="search" autocomplete="off">
+  <button class="btn" type="submit">Найти</button>
+</form>
+
+<div class="chips" id="chips"></div>
+<button class="more hidden" id="more-chips" type="button"></button>
+
+<div id="meta" class="meta hidden"></div>
+<div id="results"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#FBF3DE'); tg.setBackgroundColor('#FBF3DE'); } catch (e) {} }
+
+const CHIPS_VISIBLE = 10;
+const PAGE_SIZE = 3;      // cards shown per tap of "Показать ещё"
+const state = { categories: [], showAll: false, active: '', requestId: 0 };
+const $ = (id) => document.getElementById(id);
+
+async function api(path) {
+  const res = await fetch(path, { headers: { 'X-Telegram-Init-Data': tg ? tg.initData : '' } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || 'Ошибка ' + res.status);
+  return body;
+}
+async function post(path, data) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': tg ? tg.initData : '' },
+    body: JSON.stringify(data),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || 'Ошибка ' + res.status);
+  return body;
+}
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v);
+  }
+  for (const c of children) if (c) node.append(c);
+  return node;
+}
+
+function showState(title, text) {
+  $('meta').classList.add('hidden');
+  $('results').replaceChildren(el('div', { class: 'state' }, el('b', { text: title }), text));
+}
+function showSkeleton() {
+  $('results').replaceChildren(...[0, 1, 2].map(() => el('div', { class: 'skeleton' })));
+}
+
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+/* ---- categories ---- */
+function renderChips() {
+  $('chips').classList.toggle('expanded', state.showAll);
+  $('chips').replaceChildren(...state.categories.map((c) =>
+    el('button', {
+      class: 'chip' + (c.name === state.active ? ' active' : ''), type: 'button',
+      onclick: () => pickCategory(c.name),
+    }, c.name, el('small', { text: String(c.count) }))
+  ));
+  const more = $('more-chips');
+  more.classList.toggle('hidden', state.categories.length <= CHIPS_VISIBLE);
+  more.textContent = state.showAll ? 'Свернуть' : `Все категории (${state.categories.length})`;
+}
+$('more-chips').addEventListener('click', () => { state.showAll = !state.showAll; renderChips(); });
+
+async function loadCategories() {
+  const data = await api('/api/categories');
+  state.categories = data.categories;
+  renderChips();
+  return data.total;
+}
+
+/* ---- search ---- */
+function pickCategory(name) {
+  state.active = state.active === name ? '' : name;
+  $('q').value = '';
+  renderChips();
+  if (state.active) runSearch({ category: state.active });
+  else { $('results').replaceChildren(); $('meta').classList.add('hidden'); }
+}
+
+async function runSearch({ q = '', category = '' }) {
+  const id = ++state.requestId;
+  showSkeleton();
+  try {
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (category) params.set('category', category);
+    const data = await api('/api/search?' + params);
+    if (id !== state.requestId) return; // a newer search superseded this one
+    renderResults(data, q || category);
+  } catch (e) {
+    if (id !== state.requestId) return;
+    showState('Не получилось загрузить', e.message);
+  }
+}
+
+function renderResults(data, label) {
+  const meta = $('meta');
+  if (!data.items.length) {
+    showState('Пока ничего нет', `По запросу «${label}» специалистов не нашлось. Попробуйте другое слово или выберите категорию.`);
+    return;
+  }
+  meta.classList.remove('hidden');
+  meta.replaceChildren('Найдено: ', el('b', { text: String(data.total) }));
+  if (data.total > data.items.length) meta.append(` · показаны ${data.items.length} лучших`);
+  meta.append(' · сначала с лучшими оценками');
+  if (data.votes_left != null) meta.append(` · оценок сегодня осталось: ${data.votes_left} из ${data.votes_per_day}`);
+  // 3 cards at a time + "Показать ещё": the server sends up to 30 best-rated, the page reveals them in pages.
+  const list = $('results');
+  list.replaceChildren();
+  let shown = 0;
+  const more = el('button', { class: 'more-results', type: 'button' });
+  const showNext = () => {
+    more.remove();
+    const next = data.items.slice(shown, shown + PAGE_SIZE);
+    list.append(...next.map(renderCard));
+    shown += next.length;
+    const left = data.items.length - shown;
+    if (left > 0) { more.textContent = `Показать ещё ${Math.min(PAGE_SIZE, left)}`; list.append(more); }
+  };
+  more.addEventListener('click', showNext);
+  showNext();
+}
+
+/* ---- links & copy ---- */
+const LINK_RE = /([\w.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9.-]*[A-Za-z]|https?:\/\/[^\s<>()]+|www\.[^\s<>()]+|(?:t\.me|telegram\.me|instagram\.com|instagr\.am|wa\.me)\/[^\s<>()]+|@[A-Za-z][A-Za-z0-9_.]{2,31}|\+?\d[\d\s\-()]{8,}\d)/gi;
+const IG_HINT_RE = /(inst(a(gram)?)?|инст(а(грам)?)?|\big)[\s:\-—–]*$/i;
+
+function openLink(url) {
+  if (tg && /^https:\/\/(t|telegram)\.me\//i.test(url) && tg.openTelegramLink) tg.openTelegramLink(url);
+  else if (tg && tg.openLink) tg.openLink(url);
+  else window.open(url, '_blank');
+}
+
+// Turns plain text into DOM nodes with tappable links (no innerHTML — ad text is untrusted).
+function linkify(text) {
+  const nodes = [];
+  let last = 0, m;
+  LINK_RE.lastIndex = 0;
+  while ((m = LINK_RE.exec(text)) !== null) {
+    let raw = m[0];
+    const trail = raw.match(/[.,;:!?…]+$/);       // sentence punctuation isn't part of the link
+    const body = trail ? raw.slice(0, -trail[0].length) : raw;
+    const end = m.index + body.length;
+    let href = null;
+    if (/^[\w.+-]+@/.test(body)) {
+      href = 'mailto:' + body;
+    } else if (body.startsWith('@')) {
+      const handle = body.slice(1);
+      const before = text.slice(Math.max(0, m.index - 14), m.index);
+      href = (handle.includes('.') || IG_HINT_RE.test(before))
+        ? 'https://instagram.com/' + handle
+        : 'https://t.me/' + handle;
+    } else if (/^\+?\d/.test(body)) {
+      href = 'tel:' + body.replace(/[^\d+]/g, '');
+    } else if (/^https?:\/\//i.test(body)) {
+      href = body;
+    } else {
+      href = 'https://' + body;
+    }
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    const a = el('a', { href, text: body, target: '_blank', rel: 'noopener' });
+    if (!/^(tel|mailto):/.test(href)) a.addEventListener('click', (e) => { e.preventDefault(); openLink(href); });
+    nodes.push(a);
+    last = end;
+    LINK_RE.lastIndex = end;                        // trailing punctuation is re-scanned as plain text
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+let toastTimer = null;
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+}
+async function copyText(value) {
+  try { await navigator.clipboard.writeText(value); }
+  catch (e) {                                       // WebView without async clipboard
+    const ta = el('textarea', { style: 'position:fixed;opacity:0;top:0' });
+    ta.value = value; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); } finally { ta.remove(); }
+  }
+  if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+  toast('Скопировано');
+}
+
+/* ---- card ---- */
+function notify(msg) { if (tg && tg.showAlert) tg.showAlert(msg); else alert(msg); }
+
+function renderCard(item) {
+  const long = item.text.length > 260;
+  const text = el('div', { class: 'text' + (long ? ' clamp' : '') }, ...linkify(item.text));
+  const toggle = long ? el('button', {
+    class: 'toggle', type: 'button',
+    onclick: () => { const c = text.classList.toggle('clamp'); toggle.textContent = c ? 'Читать полностью' : 'Свернуть'; },
+    text: 'Читать полностью',
+  }) : null;
+
+  // Rating rules live on the server (shared with the bot); the page only mirrors them:
+  // locked until the user pressed "Написать"/"Копировать", hidden for the author,
+  // one standing vote that can be switched, 3 actions per day.
+  const posBtn = el('button', { class: 'vote pos', type: 'button' });
+  const negBtn = el('button', { class: 'vote neg', type: 'button' });
+  const hint = el('div', { class: 'vote-hint hidden' });
+  const paint = () => {
+    posBtn.textContent = `👍 ${item.pos}`;
+    negBtn.textContent = `👎 ${item.neg}`;
+    posBtn.classList.toggle('mine', item.my_vote === 1);
+    negBtn.classList.toggle('mine', item.my_vote === -1);
+    const locked = !item.contacted || item.own;
+    for (const b of [posBtn, negBtn]) b.classList.toggle('locked', locked);
+    hint.textContent = item.own ? 'Это ваша карточка — оценивать её нельзя'
+      : !item.contacted ? 'Оценить можно после контакта: нажмите «Написать» или «Копировать»' : '';
+    hint.classList.toggle('hidden', !hint.textContent);
+  };
+  // The click itself unlocks rating; the server records it (and re-checks everything on vote).
+  const unlock = async () => {
+    if (item.contacted || item.own) return;
+    item.contacted = true; paint();
+    try { await post('/api/contact', { id: item.id }); }
+    catch (e) { item.contacted = false; paint(); toast(e.message); }
+  };
+  const vote = async (positive) => {
+    if (item.own) { toast('Свою карточку оценивать нельзя'); return; }
+    if (!item.contacted) { toast('Сначала нажмите «Написать»'); return; }
+    try {
+      const r = await post('/api/feedback', { id: item.id, positive });
+      item.pos = r.pos; item.neg = r.neg; item.my_vote = r.vote; paint();
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+      toast(r.changed ? `Оценка учтена · осталось сегодня: ${r.left}` : 'Эта оценка уже стоит');
+    } catch (e) { notify(e.message); }
+  };
+  posBtn.addEventListener('click', () => vote(true));
+  negBtn.addEventListener('click', () => vote(false));
+  paint();
+
+  const write = item.username ? el('a', {
+    class: 'btn write', href: 'https://t.me/' + item.username, text: 'Написать',
+    onclick: (e) => {
+      unlock();
+      if (tg && tg.openTelegramLink) { e.preventDefault(); tg.openTelegramLink('https://t.me/' + item.username); }
+    },
+  }) : null;
+
+  return el('article', { class: 'card' },
+    el('div', { class: 'card-head' },
+      el('div', {}, el('div', { class: 'name', text: item.name }), el('span', { class: 'tag', text: item.category }))),
+    text, toggle,
+    item.contact ? el('div', { class: 'contact' },
+      el('div', { class: 'links' }, ...linkify(item.contact)),
+      el('button', { class: 'copy', type: 'button', text: 'Копировать', onclick: () => { copyText(item.contact); unlock(); } })) : null,
+    el('div', { class: 'actions' }, write, el('span', { class: 'spacer' }), posBtn, negBtn),
+    hint,
+  );
+}
+
+/* ---- init ---- */
+$('search-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const q = $('q').value.trim();
+  if (!q) return;
+  state.active = ''; renderChips();
+  $('q').blur();
+  runSearch({ q });
+});
+
+(async function init() {
+  if (!tg || !tg.initData) {
+    $('search-form').classList.add('hidden');
+    showState('Откройте в Telegram', 'Это мини-приложение работает только внутри Telegram — откройте его из бота @CariOra_bot.');
+    return;
+  }
+  try {
+    const total = await loadCategories();
+    showState(`${total} ${plural(total, 'специалист', 'специалиста', 'специалистов')} в базе`,
+      'Введите, что ищете, или выберите категорию выше.');
+  } catch (e) {
+    showState('Не получилось загрузить', e.message);
+  }
+})();
+</script>
+</body>
+</html>

@@ -22,6 +22,10 @@
   .status-done { color: #2a9d4a; }
   .error { color: #c0392b; white-space: pre-wrap; }
   #run-status { margin-top: 0.6rem; font-size: 0.9rem; }
+  .opts { flex-wrap: wrap; gap: 1.2rem; margin-top: 0.5rem; }
+  .opts label { font-size: 0.9rem; display: flex; align-items: center; gap: 0.4rem; }
+  .opts input[type=number] { padding: 0.35rem; width: 6rem; }
+  .hint { font-size: 0.8rem; color: #888; margin-top: 0.4rem; }
 </style>
 </head>
 <body>
@@ -38,7 +42,17 @@
 </table>
 
 <h2>Запуск</h2>
-<div class="row">
+<div class="row opts">
+  <label>Собрать за последние
+    <input id="days-input" type="number" min="1" max="730" step="1"> дн.
+  </label>
+  <label>Лимит карточек
+    <input id="limit-input" type="number" min="0" step="10" placeholder="без лимита">
+  </label>
+  <label class="check"><input id="rescan-input" type="checkbox"> Пройти все чаты заново</label>
+</div>
+<div class="hint" id="days-hint"></div>
+<div class="row" style="margin-top:0.7rem">
   <button id="start-btn">Старт</button>
 </div>
 <div id="run-status"></div>
@@ -52,8 +66,13 @@ const runStatusEl = document.getElementById('run-status');
 const startBtn = document.getElementById('start-btn');
 const addBtn = document.getElementById('add-chat-btn');
 const chatInput = document.getElementById('chat-input');
+const daysInput = document.getElementById('days-input');
+const limitInput = document.getElementById('limit-input');
+const rescanInput = document.getElementById('rescan-input');
+const daysHint = document.getElementById('days-hint');
 
 let pollTimer = null;
+let optsInitialised = false;
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -93,7 +112,18 @@ async function loadChats() {
 async function refreshStatus() {
   const s = await api('/api/status');
   startBtn.disabled = s.running;
-  startBtn.textContent = s.running ? 'Идёт проход…' : `Старт (до ${s.cards_per_run} новых карточек)`;
+  startBtn.textContent = s.running ? 'Идёт проход…' : 'Старт';
+
+  if (!optsInitialised) {
+    optsInitialised = true;
+    daysInput.value = s.suggested_days || s.default_depth_days;
+    limitInput.value = s.cards_per_run;
+    // everything already walked: a plain "Старт" would have nothing to do
+    rescanInput.checked = !s.active_chat && s.stats.chats_total > 0;
+    daysHint.textContent = s.suggested_days
+      ? `С последнего прохода прошло ~${s.suggested_days - 1} дн. — подставлено ${s.suggested_days} (с запасом в 1 день). Дубли не добавятся.`
+      : `Глубина по умолчанию: ${s.default_depth_days} дн.`;
+  }
 
   const run = s.latest_run;
   let runHtml = '';
@@ -149,9 +179,20 @@ addBtn.addEventListener('click', async () => {
 });
 
 startBtn.addEventListener('click', async () => {
+  const depthDays = parseInt(daysInput.value, 10);
+  if (!depthDays || depthDays < 1) { alert('Укажите, за сколько дней собирать'); return; }
   startBtn.disabled = true;
   try {
-    await api('/api/run', { method: 'POST' });
+    await api('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        depth_days: depthDays,
+        cards_limit: parseInt(limitInput.value, 10) || 0,  // empty = no limit
+        rescan: rescanInput.checked,
+      }),
+    });
+    rescanInput.checked = false;  // a rescan is one-off; next click resumes
   } catch (e) {
     alert(e.message);
   }

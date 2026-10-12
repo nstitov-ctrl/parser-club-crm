@@ -52,6 +52,8 @@ import datetime as dt
 import html
 import logging
 import re
+import secrets
+import time
 from typing import Any, Awaitable, Callable, Optional
 
 import anthropic
@@ -68,7 +70,7 @@ from aiogram.types import (
     TelegramObject,
 )
 
-from app import sheets_writer, voice
+from app import sheets_writer, voice, votes
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -646,6 +648,7 @@ async def add_save(callback: CallbackQuery, state: FSMContext) -> None:
         original_text=data["text"],
         extra_contacts="",
         published_at=dt.date.today().isoformat(),
+        author_id=callback.from_user.id,  # stable id: self-vote check survives a username change
     )
     await state.clear()
     await callback.message.edit_text("Сохранено ✅")
@@ -687,6 +690,7 @@ async def find_category(message: Message, state: FSMContext) -> None:
     categories = sorted({str(c.get("Направление", "")).strip() for c in cards if str(c.get("Направление", "")).strip()})
     matched_categories = _match_categories_semantic(message.text.strip(), categories)
 
+    rank: Optional[dict[str, int]] = None
     if matched_categories is not None:
         # AI match by meaning — matches list is already in relevance order.
         rank = {cat: i for i, cat in enumerate(matched_categories)}
@@ -703,6 +707,10 @@ async def find_category(message: Message, state: FSMContext) -> None:
             f"По запросу «{message.text.strip()}» пока ничего нет.", reply_markup=_MAIN_MENU
         )
         return
+    # Best-rated first: biggest (👍 − 👎), then more 👍; search relevance only
+    # breaks ties. Done BEFORE the per-contact dedupe below so the best copy
+    # of a repost is the one that survives.
+    matches = votes.sort_by_rating(matches, rank=rank)
     # Same author reposting the same offer (dupes not yet cleaned from the
     # sheet, or dedup gaps) shouldn't eat multiple result slots — one card
     # per contact, keeping the best-ranked (already sorted above).
@@ -716,11 +724,47 @@ async def find_category(message: Message, state: FSMContext) -> None:
             seen_contacts.add(key)
         deduped.append(card)
     matches = deduped
-    shown = matches[:_MAX_RESULTS]
 
-    lines = [f"<b>Найдено: {len(matches)}</b>", ""]
+    # Remember the whole ordered list so "Показать ещё" can continue it later.
+    token = _remember_search([votes.card_id(c) for c in matches])
+    text, keyboard = _results_page(matches[:_MAX_RESULTS], 0, len(matches), token)
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+# --- Выдача порциями: 3 карточки + «Показать ещё» ---------------------------
+
+# callback_data is capped at 64 bytes, so a search's ordered card ids live in
+# memory under a short token. Entries expire; a bot restart simply asks the
+# user to repeat the search.
+_SEARCH_CACHE: dict[str, tuple[float, list[str]]] = {}
+_SEARCH_TTL = 3600
+_SEARCH_CACHE_MAX = 500
+
+
+def _remember_search(card_ids: list[str]) -> str:
+    now = time.time()
+    for key in [k for k, (ts, _) in _SEARCH_CACHE.items() if now - ts > _SEARCH_TTL]:
+        del _SEARCH_CACHE[key]
+    while len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:             # drop the oldest
+        del _SEARCH_CACHE[min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k][0])]
+    token = secrets.token_hex(4)
+    _SEARCH_CACHE[token] = (now, card_ids)
+    return token
+
+
+def _results_page(
+    page: list[dict], start: int, total: int, token: str, next_offset: Optional[int] = None
+) -> tuple[str, InlineKeyboardMarkup]:
+    """One message: up to _MAX_RESULTS cards numbered from start+1, their
+    buttons, and — if more remain — "Показать ещё N" under them.
+    next_offset is where the following page starts in the full list (differs
+    from start+len(page) when a card vanished from the sheet in between)."""
+    if start == 0:
+        lines = [f"<b>Найдено: {total}</b>", ""]
+    else:
+        lines = [f"<b>Ещё результаты: {start + 1}–{start + len(page)} из {total}</b>", ""]
     keyboard_rows: list[list[InlineKeyboardButton]] = []
-    for i, card in enumerate(shown, start=1):
+    for i, card in enumerate(page, start=start + 1):
         name = f"{card.get('Имя', '')} {card.get('Фамилия', '')}".strip() or str(
             card.get("Ник") or "без имени"
         )
@@ -738,27 +782,72 @@ async def find_category(message: Message, state: FSMContext) -> None:
             line += f"\n   {note}"
         lines.append(line)
 
-        row = card["_row"]
+        # Cards are addressed by a stable id (author+category), not a sheet row:
+        # rows shift whenever someone deletes rows, which would credit the
+        # wrong card. A vote is only accepted after "Написать" was pressed.
+        cid = votes.card_id(card)
         keyboard_rows.append(
             [
-                InlineKeyboardButton(text=f"👍 {i}", callback_data=f"fb:{row}:pos"),
-                InlineKeyboardButton(text=f"👎 {i}", callback_data=f"fb:{row}:neg"),
+                InlineKeyboardButton(text=f"✉️ Написать {i}", callback_data=f"ct:{cid}"),
+                InlineKeyboardButton(text=f"👍 {i}", callback_data=f"fb:{cid}:pos"),
+                InlineKeyboardButton(text=f"👎 {i}", callback_data=f"fb:{cid}:neg"),
             ]
         )
 
-    if len(matches) > len(shown):
-        lines.append("")
-        lines.append(f"Показаны {len(shown)} наиболее подходящих.")
+    if next_offset is None:
+        next_offset = start + len(page)
+    if next_offset < total:
+        n = min(_MAX_RESULTS, total - next_offset)
+        keyboard_rows.append(
+            [InlineKeyboardButton(text=f"⬇️ Показать ещё {n}", callback_data=f"more:{token}:{next_offset}")]
+        )
 
-    # Feedback buttons alone left a dead end if none of the 3 results fit —
+    # Feedback buttons alone left a dead end if none of the results fit —
     # always offer a fresh search / add right under them.
     keyboard_rows.extend(_MAIN_MENU.inline_keyboard)
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
-    await message.answer(
-        "\n".join(lines),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard_rows),
-    )
+
+@router.callback_query(F.data.startswith("more:"))
+async def cb_more(callback: CallbackQuery) -> None:
+    try:
+        _, token, offset_str = (callback.data or "").split(":")
+        offset = int(offset_str)
+    except ValueError:
+        await callback.answer()
+        return
+    entry = _SEARCH_CACHE.get(token)
+    if entry is None or time.time() - entry[0] > _SEARCH_TTL or offset < 0:
+        await callback.answer("Список устарел — повтори поиск.", show_alert=True)
+        return
+    ids = entry[1]
+
+    # Take the button off the message first, so a double tap can't post the page twice.
+    markup = callback.message.reply_markup
+    if markup:
+        rows = [r for r in markup.inline_keyboard
+                if not any((b.callback_data or "").startswith("more:") for b in r)]
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            )
+        except Exception:
+            logger.debug("could not drop 'more' button", exc_info=True)
+
+    try:
+        cards = await asyncio.to_thread(sheets_writer.list_cards_with_rows)
+    except Exception:
+        logger.exception("failed to read cards for 'more'")
+        await callback.answer("Не получилось прочитать базу, попробуй чуть позже.", show_alert=True)
+        return
+    by_id = {votes.card_id(c): c for c in cards}                 # fresh ratings; deleted cards drop out
+    page = [by_id[i] for i in ids[offset:offset + _MAX_RESULTS] if i in by_id]
+    if not page:
+        await callback.answer("Больше результатов нет.")
+        return
+    text, keyboard = _results_page(page, offset, len(ids), token, next_offset=offset + _MAX_RESULTS)
+    await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
 
 
 # --- Отзыв на результат поиска ----------------------------------------------
@@ -769,36 +858,104 @@ async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+_CARD_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _tg_user(callback: CallbackQuery) -> dict:
+    return {"id": callback.from_user.id, "username": callback.from_user.username}
+
+
+def _find_card(cards: list[dict], cid: str) -> Optional[dict]:
+    return next((c for c in cards if votes.card_id(c) == cid), None)
+
+
+@router.callback_query(F.data.startswith("ct:"))
+async def cb_contact(callback: CallbackQuery) -> None:
+    """"✉️ Написать" — shows how to reach the author AND records the contact,
+    which is what unlocks rating that card (see app/votes.py)."""
+    cid = (callback.data or "")[3:]
+    if not _CARD_ID_RE.match(cid):
+        await callback.answer("Кнопка устарела — повтори поиск.", show_alert=True)
+        return
+    try:
+        cards = await asyncio.to_thread(sheets_writer.list_cards_with_rows)
+        card = _find_card(cards, cid)
+        if card is None:
+            await callback.answer("Карточка изменилась — повтори поиск.", show_alert=True)
+            return
+        await asyncio.to_thread(sheets_writer.get_ledger().record_contact, card, _tg_user(callback))
+    except Exception:
+        logger.exception("failed to record contact")
+        await callback.answer("Не получилось открыть контакт, попробуй позже.", show_alert=True)
+        return
+
+    nick = str(card.get("Ник") or "").strip().lstrip("@")
+    contact = _format_contact(str(card.get("Дополнительные контакты") or card.get("Ник") or "—"))
+    name = f"{card.get('Имя', '')} {card.get('Фамилия', '')}".strip() or nick or "исполнитель"
+    link = f'<a href="https://t.me/{nick}">@{html.escape(nick)}</a>\n' if nick else ""
+    await callback.message.answer(
+        f"✉️ <b>{html.escape(name)}</b>\n{link}{html.escape(contact)}\n\n"
+        "Когда свяжетесь — можно оставить оценку 👍/👎 в списке выше "
+        f"(до {votes.MAX_VOTES_PER_DAY} оценок в сутки).",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("fb:"))
 async def cb_feedback(callback: CallbackQuery) -> None:
-    try:
-        _, row_str, kind = (callback.data or "").split(":")
-        row = int(row_str)
-    except ValueError:
-        await callback.answer()
+    parts = (callback.data or "").split(":")
+    if len(parts) != 3 or parts[2] not in ("pos", "neg") or not _CARD_ID_RE.match(parts[1]):
+        # also catches buttons from messages sent before the ledger existed (fb:<row>:..)
+        await callback.answer("Кнопка устарела — повтори поиск.", show_alert=True)
         return
+    cid, positive = parts[1], parts[2] == "pos"
 
     try:
-        sheets_writer.add_feedback(row, positive=kind == "pos")
+        cards = await asyncio.to_thread(sheets_writer.list_cards_with_rows)
+        result = await asyncio.to_thread(
+            sheets_writer.get_ledger().cast_vote, cards, cid, _tg_user(callback), positive
+        )
+    except votes.VoteError as err:
+        await callback.answer(err.message, show_alert=True)
+        return
     except Exception:
         logger.exception("failed to record feedback")
-        await callback.answer("Не получилось сохранить отзыв, попробуй позже.", show_alert=True)
+        await callback.answer("Не получилось сохранить оценку, попробуй позже.", show_alert=True)
         return
 
+    # Mark the standing vote on this card's buttons (it can still be changed).
     markup = callback.message.reply_markup
     if markup:
         new_rows = []
         for keyboard_row in markup.inline_keyboard:
-            if keyboard_row and (keyboard_row[0].callback_data or "").startswith(f"fb:{row}:"):
-                new_rows.append(
-                    [InlineKeyboardButton(text="Отзыв учтён ✅", callback_data="noop")]
-                )
+            if any((b.callback_data or "").startswith(f"fb:{cid}:") for b in keyboard_row):
+                fixed = []
+                for b in keyboard_row:
+                    if (b.callback_data or "").startswith(f"fb:{cid}:"):
+                        mine = b.callback_data.endswith(":pos" if positive else ":neg")
+                        label = b.text.removeprefix("✅ ")
+                        b = InlineKeyboardButton(text=("✅ " + label) if mine else label,
+                                                 callback_data=b.callback_data)
+                    fixed.append(b)
+                new_rows.append(fixed)
             else:
                 new_rows.append(keyboard_row)
-        await callback.message.edit_reply_markup(
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=new_rows)
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=new_rows)
+            )
+        except Exception:
+            logger.debug("reply markup unchanged", exc_info=True)
+
+    if result["changed"]:
+        await callback.answer(
+            f"Оценка учтена: 👍 {result['pos']} · 👎 {result['neg']}. "
+            f"Осталось сегодня: {result['left']}"
         )
-    await callback.answer("Спасибо за отзыв!")
+    else:
+        await callback.answer("Эта оценка у вас уже стоит.")
 
 
 # --- Свободный вопрос → ИИ-агент ---------------------------------------------
