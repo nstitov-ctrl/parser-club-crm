@@ -216,7 +216,11 @@ class Ledger:
         if state["left"] <= 0:
             oldest = min(_parse_ts(r.get("Время")) for r in state["recent"])
             hours = max(1, int((oldest + timedelta(hours=24) - _now()).total_seconds() // 3600) + 1)
-            raise VoteError("limit", f"Лимит — {MAX_VOTES_PER_DAY} оценки в сутки. Следующая будет доступна примерно через {hours} ч.")
+            raise VoteError(
+                "limit",
+                f"Можно поставить только {MAX_VOTES_PER_DAY} оценки в сутки. "
+                f"Следующую получится поставить примерно через {hours} ч.",
+            )
 
         self._votes_ws.append_row(
             [_now().isoformat(), str(user.get("id", "")), str(user.get("username") or ""), key, new],

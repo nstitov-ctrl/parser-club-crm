@@ -895,8 +895,7 @@ async def cb_contact(callback: CallbackQuery) -> None:
     link = f'<a href="https://t.me/{nick}">@{html.escape(nick)}</a>\n' if nick else ""
     await callback.message.answer(
         f"✉️ <b>{html.escape(name)}</b>\n{link}{html.escape(contact)}\n\n"
-        "Когда свяжетесь — можно оставить оценку 👍/👎 в списке выше "
-        f"(до {votes.MAX_VOTES_PER_DAY} оценок в сутки).",
+        "Когда свяжетесь — можно оставить оценку 👍/👎 в списке выше.",
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
@@ -950,10 +949,7 @@ async def cb_feedback(callback: CallbackQuery) -> None:
             logger.debug("reply markup unchanged", exc_info=True)
 
     if result["changed"]:
-        await callback.answer(
-            f"Оценка учтена: 👍 {result['pos']} · 👎 {result['neg']}. "
-            f"Осталось сегодня: {result['left']}"
-        )
+        await callback.answer(f"Оценка учтена: 👍 {result['pos']} · 👎 {result['neg']}")
     else:
         await callback.answer("Эта оценка у вас уже стоит.")
 

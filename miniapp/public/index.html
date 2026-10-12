@@ -241,8 +241,6 @@ function renderResults(data, label) {
   meta.classList.remove('hidden');
   meta.replaceChildren('Найдено: ', el('b', { text: String(data.total) }));
   if (data.total > data.items.length) meta.append(` · показаны ${data.items.length} лучших`);
-  meta.append(' · сначала с лучшими оценками');
-  if (data.votes_left != null) meta.append(` · оценок сегодня осталось: ${data.votes_left} из ${data.votes_per_day}`);
   // 3 cards at a time + "Показать ещё": the server sends up to 30 best-rated, the page reveals them in pages.
   const list = $('results');
   list.replaceChildren();
@@ -368,7 +366,7 @@ function renderCard(item) {
       const r = await post('/api/feedback', { id: item.id, positive });
       item.pos = r.pos; item.neg = r.neg; item.my_vote = r.vote; paint();
       if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
-      toast(r.changed ? `Оценка учтена · осталось сегодня: ${r.left}` : 'Эта оценка уже стоит');
+      toast(r.changed ? 'Оценка учтена' : 'Эта оценка уже стоит');
     } catch (e) { notify(e.message); }
   };
   posBtn.addEventListener('click', () => vote(true));
