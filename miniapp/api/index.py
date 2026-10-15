@@ -31,7 +31,8 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _match_prompt import SYSTEM_PROMPT, TOOL_SCHEMA  # noqa: E402
 from _votes import (  # noqa: E402  (generated copy of backend/app/votes.py)
-    MAX_VOTES_PER_DAY, Ledger, VoteError, card_id, card_key, is_own_card, sort_by_rating,
+    MAX_VOTES_PER_DAY, Ledger, VoteError, card_id, card_key, display_text, is_own_card, is_verified,
+    sort_by_rating,
 )
 
 logger = logging.getLogger("miniapp")
@@ -156,7 +157,8 @@ def _public(card: dict, state: dict, user: dict) -> dict:
         "id": card_id(card),
         "name": name,
         "category": _category(card),
-        "text": str(card.get("Оригинальный текст объявления", "")),
+        "text": display_text(card),                 # the author's corrected text wins over the scraped one
+        "verified": is_verified(card),              # author confirmed the card within ~6 months → check mark
         "contact": contact,
         "username": _tg_username(contact),
         "pos": _as_int(card.get("Отзывы +")),

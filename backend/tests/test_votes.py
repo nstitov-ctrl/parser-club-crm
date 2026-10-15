@@ -4,7 +4,7 @@ Run from backend/:  python -m unittest tests.test_votes -v
 (No network, no real sheet — votes made here never touch production data.)
 """
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import gspread
 
@@ -31,6 +31,9 @@ class FakeWS:
 
     def update(self, rng, values):
         self.rows[0] = list(values[0])
+
+    def col_values(self, c):
+        return [row[c - 1] if c - 1 < len(row) else "" for row in self.rows]
 
     def cell(self, r, c):
         row = self.rows[r - 1]
@@ -173,6 +176,112 @@ class VoteRules(unittest.TestCase):
         # net: b=4 (5 pos), f=4, e=4 (4 pos; "А" is more relevant than "Б"), c=3, a=1, d=-2
         self.assertEqual([c["Ник"] for c in ordered], ["b", "f", "e", "c", "a", "d"])
         self.assertEqual([votes.net_score(c) for c in ordered], [4, 4, 4, 3, 1, -2])
+
+
+class Verification(unittest.TestCase):
+    def test_check_mark_lasts_about_six_months(self):
+        today = date(2026, 10, 15)
+        fresh_ = {"Подтверждено": (today - timedelta(days=100)).isoformat()}
+        edge = {"Подтверждено": (today - timedelta(days=votes.VERIFIED_DAYS)).isoformat()}
+        old = {"Подтверждено": (today - timedelta(days=votes.VERIFIED_DAYS + 1)).isoformat()}
+        self.assertTrue(votes.is_verified(fresh_, today))
+        self.assertTrue(votes.is_verified(edge, today))
+        self.assertFalse(votes.is_verified(old, today))
+        self.assertFalse(votes.is_verified({"Подтверждено": ""}, today))
+        self.assertFalse(votes.is_verified({"Подтверждено": "не дата"}, today))
+        self.assertTrue(votes.is_verified({"Подтверждено": "2026-10-14T09:00:00+00:00"}, today), "full ISO accepted")
+
+    def test_verified_goes_first_only_at_equal_score(self):
+        today = votes._now().date().isoformat()
+        mk = lambda n, p, m, ok: {"Ник": n, "Направление": "А", "Отзывы +": p, "Отзывы -": m, "Подтверждено": today if ok else ""}
+        cards = [mk("plain_same", 3, 0, False), mk("verified_same", 3, 0, True),
+                 mk("plain_best", 5, 0, False), mk("verified_low", 1, 0, True)]
+        order = [c["Ник"] for c in votes.sort_by_rating(cards)]
+        self.assertEqual(order, ["plain_best", "verified_same", "plain_same", "verified_low"])
+
+    def test_author_text_replaces_scraped_text(self):
+        self.assertEqual(votes.display_text({"Оригинальный текст объявления": "старый", "Текст от автора": "новый"}), "новый")
+        self.assertEqual(votes.display_text({"Оригинальный текст объявления": "старый", "Текст от автора": "  "}), "старый")
+
+    def test_changing_category_keeps_votes_and_contacts_attached(self):
+        ledger, ws = make([IVAN]); card = fresh(ws)[0]
+        ledger.record_contact(card, USER)
+        ledger.cast_vote(fresh(ws), votes.card_id(card), USER, True)
+        old_key = votes.card_key(card)
+        new_key = "ivan_test|йога"
+        self.assertEqual(ledger.migrate_key(old_key, new_key), 2)      # one vote row + one contact row
+        self.assertEqual(ledger.user_state(USER["id"])["votes"], {new_key: 1})
+        self.assertIn(new_key, ledger.contacted_keys(USER["id"]))
+
+
+class MyCards(unittest.TestCase):
+    """Author flow of the bot's "Мои карточки", on the real sheets_writer functions."""
+
+    def setUp(self):
+        from app import sheets_writer
+        self.sw = sheets_writer
+        self.ss = FakeSS()
+        self.ws = FakeWS(sheets_writer.HEADER, self.ss)
+        self.ss.tabs["Карточки"] = self.ws
+        sheets_writer._worksheet, sheets_writer._ledger = self.ws, None     # point the module at the fake sheet
+        self.addCleanup(lambda: (setattr(sheets_writer, "_worksheet", None), setattr(sheets_writer, "_ledger", None)))
+
+    def add(self, nick, category, text="Делаю массаж", extra=""):
+        row = {h: "" for h in self.sw.HEADER}
+        row.update({"Ник": nick, "Имя": "Иван", "Направление": category, "Оригинальный текст объявления": text,
+                    "Дополнительные контакты": extra, "Отзывы +": 0, "Отзывы -": 0})
+        self.ws.rows.append([row[h] for h in self.sw.HEADER])
+        return votes.card_id(dict(row))
+
+    def cell(self, r, name):
+        return self.ws.rows[r - 1][self.sw.HEADER.index(name)]
+
+    def test_matches_by_nick_only_case_insensitive(self):
+        self.add("@Ivan_Test", "Массаж"); self.add("@other_one", "Йога", extra="@ivan_test")
+        mine = self.sw.find_my_cards("ivan_test")
+        self.assertEqual([c["Направление"] for c in mine], ["Массаж"], "a @handle inside contacts is NOT enough")
+        self.assertEqual(self.sw.find_my_cards(None), [])
+
+    def test_confirm_stamps_today_and_makes_card_verified(self):
+        cid = self.add("@ivan_test", "Массаж")
+        card = self.sw.update_my_card(cid, "Ivan_Test", {})
+        self.assertTrue(votes.is_verified(card))
+        self.assertEqual(self.cell(2, "Подтверждено"), date.today().isoformat())
+        self.assertTrue(votes.is_verified(self.sw.list_cards_with_rows()[0]))
+
+    def test_someone_else_cannot_confirm(self):
+        cid = self.add("@ivan_test", "Массаж")
+        with self.assertRaises(self.sw.CardUpdateError):
+            self.sw.update_my_card(cid, "intruder", {})
+        self.assertEqual(self.cell(2, "Подтверждено"), "")
+
+    def test_corrected_text_is_shown_instead_of_original(self):
+        cid = self.add("@ivan_test", "Массаж", text="старый текст")
+        card = self.sw.update_my_card(cid, "ivan_test", {"Текст от автора": "новый текст"})
+        self.assertEqual(votes.display_text(card), "новый текст")
+        self.assertEqual(self.cell(2, "Оригинальный текст объявления"), "старый текст")   # original is kept
+
+    def test_unknown_columns_are_refused(self):
+        cid = self.add("@ivan_test", "Массаж")
+        with self.assertRaises(self.sw.CardUpdateError):
+            self.sw.update_my_card(cid, "ivan_test", {"Отзывы +": "999"})
+
+    def test_category_change_moves_votes_and_blocks_collisions(self):
+        cid = self.add("@ivan_test", "Массаж"); self.add("@ivan_test", "Йога")
+        led = self.sw.get_ledger()
+        card = self.sw.list_cards_with_rows()[0]
+        led.record_contact(card, USER); led.cast_vote(self.sw.list_cards_with_rows(), cid, USER, True)
+        with self.assertRaises(self.sw.CardUpdateError):                       # already has a "Йога" card
+            self.sw.update_my_card(cid, "ivan_test", {"Направление": "Йога"})
+        updated = self.sw.update_my_card(cid, "ivan_test", {"Направление": "Спорт"})
+        self.assertEqual(updated["Направление"], "Спорт")
+        self.assertEqual(led.user_state(USER["id"])["votes"], {votes.card_key(updated): 1})
+
+    def test_bot_added_card_is_verified_at_once(self):
+        today = date.today().isoformat()
+        self.sw.append_card("@ivan_test", "Иван", "", "Массаж", "текст", "", "2026-10-15", author_id=5, confirmed_on=today)
+        self.assertTrue(votes.is_verified(self.sw.list_cards_with_rows()[0]))
+        self.assertEqual(len(self.ws.rows[1]), len(self.sw.HEADER), "row width matches the header")
 
 
 if __name__ == "__main__":

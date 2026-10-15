@@ -9,6 +9,7 @@ the bot's per-result 👍/👎 buttons):
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 from typing import Optional
 
@@ -35,6 +36,12 @@ HEADER = [
     # Numeric Telegram ID of the card's author — lets the voting rules block
     # self-votes even if the @username changes (see app/votes.py).
     "ID автора",
+    # Author verification (check mark): date the author confirmed/corrected the
+    # card (valid ~6 months), their corrected text (shown instead of the scraped
+    # one), and a manual-cleanup marker ("УДАЛИТЬ") — rows are deleted by hand.
+    "Подтверждено",
+    "Текст от автора",
+    "Удалить?",
 ]
 
 # Known "same category, different wording" variants seen in the sheet —
@@ -157,6 +164,8 @@ def _get_worksheet() -> gspread.Worksheet:
 
     first_row = worksheet.row_values(1)
     if first_row != HEADER:
+        if worksheet.col_count < len(HEADER):      # new columns need grid room first
+            worksheet.add_cols(len(HEADER) - worksheet.col_count)
         worksheet.update("A1", [HEADER])
 
     _worksheet = worksheet
@@ -192,7 +201,10 @@ def append_card(
     extra_contacts: Optional[str],
     published_at: Optional[str],
     author_id: Optional[int] = None,
+    confirmed_on: Optional[str] = None,
 ) -> None:
+    """confirmed_on (ISO date) marks the card verified right away — used by the
+    bot's "Добавить" flow, where the author wrote the card themselves."""
     worksheet = _get_worksheet()
     worksheet.append_row(
         [
@@ -206,9 +218,64 @@ def append_card(
             0,
             0,
             author_id or "",
+            confirmed_on or "",
+            "",
+            "",
         ],
         value_input_option="RAW",
     )
+
+
+# ---- "Мои карточки": author verification by @nick ----------------------
+
+def _norm_nick(value: object) -> str:
+    return str(value or "").strip().lstrip("@").lower()
+
+
+def find_my_cards(username: Optional[str]) -> list[dict]:
+    """Cards whose "Ник" equals the caller's Telegram @username (case-insensitive).
+    Verification is by nick only: whoever writes to the bot from that @username
+    is treated as the card's author."""
+    me = _norm_nick(username)
+    if not me:
+        return []
+    return [c for c in list_cards_with_rows() if _norm_nick(c.get("Ник")) == me]
+
+
+class CardUpdateError(Exception):
+    """Refusal with a message that is safe to show to the user."""
+
+
+def update_my_card(card_id: str, username: Optional[str], changes: dict[str, str]) -> dict:
+    """Confirms (empty `changes`) or corrects one of the caller's cards and stamps
+    today's date in "Подтверждено". Allowed keys: Имя, Направление, Текст от автора.
+    Re-reads the sheet, so a stale row number can never hit the wrong card."""
+    allowed = {"Имя", "Направление", votes.AUTHOR_TEXT_COL}
+    if set(changes) - allowed:
+        raise CardUpdateError("Это поле менять нельзя.")
+    cards = list_cards_with_rows()
+    card = next((c for c in cards if votes.card_id(c) == card_id), None)
+    if card is None:
+        raise CardUpdateError("Карточка изменилась — открой «Мои карточки» заново.")
+    if not _norm_nick(username) or _norm_nick(card.get("Ник")) != _norm_nick(username):
+        raise CardUpdateError("Эта карточка привязана к другому нику.")
+
+    old_key = votes.card_key(card)
+    updated = dict(card, **changes)
+    new_key = votes.card_key(updated)
+    if new_key != old_key and any(votes.card_key(c) == new_key for c in cards if c["_row"] != card["_row"]):
+        raise CardUpdateError("У тебя уже есть карточка в этой категории.")
+
+    today = dt.date.today().isoformat()
+    ws = _get_worksheet()
+    header = ws.row_values(1)
+    cells = [gspread.Cell(card["_row"], header.index(k) + 1, v) for k, v in changes.items()]
+    cells.append(gspread.Cell(card["_row"], header.index(votes.CONFIRMED_COL) + 1, today))
+    ws.update_cells(cells, value_input_option="RAW")
+    if new_key != old_key:
+        get_ledger().migrate_key(old_key, new_key)      # votes/contacts keep following the card
+    updated[votes.CONFIRMED_COL] = today
+    return updated
 
 
 def set_category(row: int, category: str) -> None:

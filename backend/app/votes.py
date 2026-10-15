@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import gspread
@@ -37,6 +37,9 @@ LEDGER_HEADER = ["Время", "ID голосующего", "Ник голосу
 CONTACTS_HEADER = ["Время", "ID пользователя", "Ник пользователя", "Ключ карточки"]
 AUTHOR_ID_COL = "ID автора"
 POS_COL, NEG_COL = "Отзывы +", "Отзывы -"
+CONFIRMED_COL = "Подтверждено"        # ISO date the author last confirmed/corrected the card
+AUTHOR_TEXT_COL = "Текст от автора"   # corrected text — shown INSTEAD of the scraped original
+VERIFIED_DAYS = 183                   # the check mark lasts ~6 months
 
 
 class VoteError(Exception):
@@ -56,7 +59,13 @@ def _norm(value: object) -> str:
 
 def author_key(card: dict) -> str:
     nick = _norm(card.get("Ник")).lstrip("@")
-    return nick or _norm(card.get("Дополнительные контакты"))
+    if nick:
+        return nick
+    contacts = _norm(card.get("Дополнительные контакты"))
+    if contacts:
+        return contacts
+    author_id = _norm(card.get(AUTHOR_ID_COL))      # e.g. added via the bot by someone without a @username
+    return f"id{author_id}" if author_id else ""
 
 
 def card_key(card: dict) -> str:
@@ -80,13 +89,31 @@ def net_score(card: dict) -> int:
     return as_int(card.get(POS_COL)) - as_int(card.get(NEG_COL))
 
 
+def is_verified(card: dict, today: Optional[date] = None) -> bool:
+    """The author confirmed or corrected this card within the last ~6 months."""
+    raw = str(card.get(CONFIRMED_COL) or "").strip()
+    if not raw:
+        return False
+    try:
+        confirmed = datetime.fromisoformat(raw[:10]).date()
+    except ValueError:
+        return False
+    return ((today or _now().date()) - confirmed) <= timedelta(days=VERIFIED_DAYS)
+
+
+def display_text(card: dict) -> str:
+    """The author's corrected text wins over the scraped original."""
+    return str(card.get(AUTHOR_TEXT_COL) or "").strip() or str(card.get("Оригинальный текст объявления") or "")
+
+
 def sort_by_rating(cards: list[dict], rank: Optional[dict[str, int]] = None) -> list[dict]:
-    """Best-rated first: biggest (👍 − 👎), then more 👍, then search relevance
-    (position of the card's category in `rank`), then original order."""
+    """Best-rated first: biggest (👍 − 👎); at equal score a verified card goes
+    first; then more 👍, then search relevance (position of the card's
+    category in `rank`), then original order."""
     def key(item: tuple[int, dict]):
         i, c = item
         rel = rank.get(str(c.get("Направление", "")).strip(), 0) if rank else 0
-        return (-net_score(c), -as_int(c.get(POS_COL)), rel, i)
+        return (-net_score(c), 0 if is_verified(c) else 1, -as_int(c.get(POS_COL)), rel, i)
     return [c for _, c in sorted(enumerate(cards), key=key)]
 
 
@@ -228,6 +255,19 @@ class Ledger:
         )
         pos, neg = self._adjust_counters(card, old, new)
         return {"changed": True, "vote": new, "pos": pos, "neg": neg, "left": state["left"] - 1}
+
+    def migrate_key(self, old_key: str, new_key: str) -> int:
+        """Re-points ledger rows when a card's key changes (the author corrected
+        the category), so standing votes and contact unlocks keep following the card."""
+        moved = 0
+        for ws, header in ((self._votes_ws, LEDGER_HEADER), (self._contacts_ws, CONTACTS_HEADER)):
+            col = header.index("Ключ карточки") + 1
+            cells = [gspread.Cell(i, col, new_key)
+                     for i, v in enumerate(ws.col_values(col), start=1) if i > 1 and v == old_key]
+            if cells:
+                ws.update_cells(cells, value_input_option="RAW")
+                moved += len(cells)
+        return moved
 
     def _adjust_counters(self, card: dict, old: int, new: int) -> tuple[int, int]:
         ws = self.cards_ws

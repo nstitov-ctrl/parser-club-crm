@@ -118,7 +118,9 @@ async def _run_pass(
                     extracted = await asyncio.to_thread(
                         filtering.classify_and_extract, text, prof_first, prof_last
                     )
-                    if extracted and extracted["is_service_ad"]:
+                    # A card with neither an @username nor a numeric ID can't be
+                    # verified or contacted reliably — not worth keeping in the base.
+                    if extracted and extracted["is_service_ad"] and (username or author_id):
                         published_at = message.date.isoformat() if message.date else ""
                         dedup_hash = _dedup_hash(username, text)
                         final_first = extracted["first_name"] or prof_first
