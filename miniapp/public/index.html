@@ -22,28 +22,33 @@
     --radius: 18px;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: var(--paper); color: var(--ink); }
+  html, body { margin: 0; background: #FFFFFF; color: var(--ink); }
   body {
     font-family: 'Montserrat', -apple-system, system-ui, sans-serif;
     font-size: 15px; line-height: 1.45;
     padding: 0 16px calc(24px + env(safe-area-inset-bottom));
     min-height: 100vh;
   }
-  header { padding: 20px 0 6px; }
-  .brand { font-weight: 800; font-size: 26px; letter-spacing: -0.02em; }
+  .hero { padding: 22px 0 4px; text-align: center; }
+  .logo { display: block; width: 104px; height: 104px; margin: 0 auto; border-radius: 50%;
+    box-shadow: 0 2px 14px rgba(27, 32, 21, 0.12); }
+  .brand { font-weight: 800; font-size: 28px; letter-spacing: -0.02em; margin-top: 12px; }
   .brand span { color: var(--marigold-deep); }
-  .tagline { color: var(--ink-soft); font-size: 13px; margin-top: 2px; }
+  .tagline { color: var(--ink-soft); font-size: 15px; margin-top: 4px; }
 
-  .search {
-    display: flex; gap: 8px; margin: 16px 0 12px; position: sticky; top: 0;
-    padding: 8px 0; background: var(--paper); z-index: 5;
-  }
+  .search { margin: 20px 0 14px; }
   .search input {
-    flex: 1; min-width: 0; font: inherit; font-size: 16px; /* 16px stops iOS zoom */
-    padding: 14px 16px; border: 2px solid var(--line); border-radius: 14px;
+    display: block; width: 100%; font: inherit; font-size: 16px; /* 16px stops iOS zoom */
+    padding: 15px 18px; border: 2px solid var(--line); border-radius: 16px;
     background: var(--card); color: var(--ink); outline: none;
   }
   .search input:focus { border-color: var(--marigold); }
+  .go {                                  /* round "Найти" button, centred under the field */
+    display: block; width: 76px; height: 76px; margin: 14px auto 0; border: 0; border-radius: 50%;
+    background: var(--marigold); color: var(--ink); font: inherit; font-weight: 800; font-size: 15px;
+    cursor: pointer; box-shadow: 0 4px 14px rgba(242, 169, 0, 0.35);
+  }
+  .go:active { transform: scale(0.96); }
   .btn {
     font: inherit; font-weight: 700; border: 0; border-radius: 14px; cursor: pointer;
     padding: 0 18px; background: var(--marigold); color: var(--ink);
@@ -116,14 +121,15 @@
 </style>
 </head>
 <body>
-<header>
-  <div class="brand">Cari<span>Ora</span></div>
-  <div class="tagline">Услуги и специалисты на Бали — самые актуальные предложения острова на основе самых популярных сообществ.</div>
+<header class="hero">
+  <img class="logo" src="/logo.png" alt="CariOra" width="104" height="104">
+  <div class="brand">Car-i-<span>Ora</span></div>
+  <div class="tagline">Человек ищет человека</div>
 </header>
 
 <form class="search" id="search-form">
-  <input id="q" type="search" placeholder="Что ищете? Например, «нужна татуировка»" enterkeyhint="search" autocomplete="off">
-  <button class="btn" type="submit">Найти</button>
+  <input id="q" type="search" placeholder="опишите человека" enterkeyhint="search" autocomplete="off">
+  <button class="go" type="submit" aria-label="Найти">Найти</button>
 </form>
 
 <div class="chips" id="chips"></div>
@@ -135,7 +141,7 @@
 
 <script>
 const tg = window.Telegram && window.Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#FBF3DE'); tg.setBackgroundColor('#FBF3DE'); } catch (e) {} }
+if (tg) { tg.ready(); tg.expand(); try { tg.setHeaderColor('#FFFFFF'); tg.setBackgroundColor('#FFFFFF'); } catch (e) {} }
 
 const CHIPS_VISIBLE = 10;
 const PAGE_SIZE = 3;      // cards shown per tap of "Показать ещё"

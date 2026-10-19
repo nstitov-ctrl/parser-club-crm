@@ -256,7 +256,7 @@ def update_my_card(card_id: str, username: Optional[str], changes: dict[str, str
     cards = list_cards_with_rows()
     card = next((c for c in cards if votes.card_id(c) == card_id), None)
     if card is None:
-        raise CardUpdateError("Карточка изменилась — открой «Мои карточки» заново.")
+        raise CardUpdateError("Карточка изменилась — открой «Личный кабинет» заново.")
     if not _norm_nick(username) or _norm_nick(card.get("Ник")) != _norm_nick(username):
         raise CardUpdateError("Эта карточка привязана к другому нику.")
 

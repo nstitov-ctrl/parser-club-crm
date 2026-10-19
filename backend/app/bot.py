@@ -112,9 +112,8 @@ async def _voice_transcription_middleware(
 
 _MAIN_MENU = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Добавить эксперта/товар", callback_data="add")],
+        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="cabinet")],
         [InlineKeyboardButton(text="🔍 Найти по категории", callback_data="find")],
-        [InlineKeyboardButton(text="👤 Мои карточки", callback_data="mine")],
     ]
 )
 
@@ -961,7 +960,7 @@ async def cb_feedback(callback: CallbackQuery) -> None:
         await callback.answer("Эта оценка у вас уже стоит.")
 
 
-# --- Мои карточки: подтверждение автора по @нику ----------------------------
+# --- Личный кабинет: объявления автора, подтверждение и правка по @нику ----------------------------
 #
 # Whoever writes to the bot from the @username on a card is treated as its author
 # (verification is by nick only). Confirming or correcting a card stamps today's
@@ -979,6 +978,40 @@ _EDIT_FIELDS = {  # callback field -> (sheet column, question)
 }
 
 
+def _mine_buttons(cid: str) -> InlineKeyboardMarkup:
+    """Under each card in the cabinet: confirm as-is, or open the "what to change" choice."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"vf:{cid}"),
+                InlineKeyboardButton(text="✏️ Изменить", callback_data=f"ed:{cid}"),
+            ]
+        ]
+    )
+
+
+def _mine_edit_buttons(cid: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✏️ Имя", callback_data=f"em:{cid}:name"),
+                InlineKeyboardButton(text="📂 Категория", callback_data=f"em:{cid}:category"),
+                InlineKeyboardButton(text="📝 Текст", callback_data=f"em:{cid}:text"),
+            ],
+            [InlineKeyboardButton(text="↩️ Назад", callback_data=f"bk:{cid}")],
+        ]
+    )
+
+
+def _cabinet_footer() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Создать новую", callback_data="add")],
+            [InlineKeyboardButton(text="🔍 Найти по категории", callback_data="find")],
+        ]
+    )
+
+
 def _mine_card_view(card: dict) -> tuple[str, InlineKeyboardMarkup]:
     cid = votes.card_id(card)
     name = f"{card.get('Имя', '')} {card.get('Фамилия', '')}".strip() or str(card.get("Ник") or "без имени")
@@ -990,28 +1023,22 @@ def _mine_card_view(card: dict) -> tuple[str, InlineKeyboardMarkup]:
         f"<b>{html.escape(name)}</b> ({html.escape(str(card.get('Направление', '')))})\n"
         f"{html.escape(snippet)}\n\nСтатус: {status}"
     )
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Всё верно — подтвердить", callback_data=f"vf:{cid}")],
-            [
-                InlineKeyboardButton(text="✏️ Имя", callback_data=f"em:{cid}:name"),
-                InlineKeyboardButton(text="📂 Категория", callback_data=f"em:{cid}:category"),
-                InlineKeyboardButton(text="📝 Текст", callback_data=f"em:{cid}:text"),
-            ],
-        ]
-    )
-    return text, markup
+    return text, _mine_buttons(cid)
 
 
-@router.callback_query(F.data == "mine")
-async def cb_mine(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data.in_({"cabinet", "mine"}))  # "mine" = buttons in messages sent before the rename
+async def cb_cabinet(callback: CallbackQuery, state: FSMContext) -> None:
+    """Личный кабинет: the ads already added under this @nick (each with
+    "Изменить"), and below them "Создать новую"."""
     await state.clear()
     username = callback.from_user.username
     if not username:
         await callback.message.answer(
-            "У тебя в Telegram не указан username (@ник) — подтверждение работает по нику. "
-            "Укажи его в настройках Telegram и вернись сюда.",
-            reply_markup=_MAIN_MENU,
+            "👤 <b>Личный кабинет</b>\n\nУ тебя в Telegram не указан username (@ник): объявления "
+            "привязываются к нику, поэтому показать уже добавленные не получится. Укажи ник в настройках "
+            "Telegram и вернись сюда. Новое объявление можно создать и сейчас.",
+            parse_mode="HTML",
+            reply_markup=_cabinet_footer(),
         )
         await callback.answer()
         return
@@ -1021,26 +1048,51 @@ async def cb_mine(callback: CallbackQuery, state: FSMContext) -> None:
         logger.exception("failed to load author's cards")
         await callback.answer("Не получилось прочитать базу, попробуй чуть позже.", show_alert=True)
         return
+    who = f"@{html.escape(username)}"
     if not cards:
         await callback.message.answer(
-            f"Карточек с ником @{html.escape(username)} не нашёл. Если твоего объявления ещё нет в базе — "
-            "нажми «Добавить»: такая карточка сразу получит галочку.",
+            f"👤 <b>Личный кабинет</b> · {who}\n\nОбъявлений с этим ником пока нет.",
             parse_mode="HTML",
-            reply_markup=_MAIN_MENU,
+            reply_markup=_cabinet_footer(),
         )
         await callback.answer()
         return
     await callback.message.answer(
-        f"Карточек с ником @{html.escape(username)}: {len(cards)}. Подтверди, что всё верно, или поправь — "
-        "рядом с карточкой в поиске появится галочка ✅.",
-        parse_mode="HTML",
+        f"👤 <b>Личный кабинет</b> · {who}\nВаши объявления: {len(cards)}", parse_mode="HTML"
     )
     for card in cards[:_MY_CARDS_MAX]:
         text, markup = _mine_card_view(card)
         await callback.message.answer(text, parse_mode="HTML", reply_markup=markup)
     if len(cards) > _MY_CARDS_MAX:
-        await callback.message.answer(f"…и ещё {len(cards) - _MY_CARDS_MAX}. Покажу их после того, как разберёшь эти.")
-    await callback.message.answer("Что дальше?", reply_markup=_MAIN_MENU)
+        await callback.message.answer(f"…и ещё {len(cards) - _MY_CARDS_MAX}.")
+    await callback.message.answer("Что дальше?", reply_markup=_cabinet_footer())
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ed:"))
+async def cb_edit_menu(callback: CallbackQuery) -> None:
+    """"✏️ Изменить" — swaps the card's buttons for the choice of what to change."""
+    cid = (callback.data or "")[3:]
+    if not _CARD_ID_RE.match(cid):
+        await callback.answer("Кнопка устарела — открой «Личный кабинет» заново.", show_alert=True)
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_mine_edit_buttons(cid))
+    except Exception:
+        logger.debug("edit menu unchanged", exc_info=True)
+    await callback.answer("Что изменить?")
+
+
+@router.callback_query(F.data.startswith("bk:"))
+async def cb_edit_back(callback: CallbackQuery) -> None:
+    cid = (callback.data or "")[3:]
+    if not _CARD_ID_RE.match(cid):
+        await callback.answer()
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=_mine_buttons(cid))
+    except Exception:
+        logger.debug("back button unchanged", exc_info=True)
     await callback.answer()
 
 
@@ -1048,7 +1100,7 @@ async def cb_mine(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_confirm_mine(callback: CallbackQuery) -> None:
     cid = (callback.data or "")[3:]
     if not _CARD_ID_RE.match(cid):
-        await callback.answer("Кнопка устарела — открой «Мои карточки» заново.", show_alert=True)
+        await callback.answer("Кнопка устарела — открой «Личный кабинет» заново.", show_alert=True)
         return
     try:
         card = await asyncio.to_thread(
@@ -1073,7 +1125,7 @@ async def cb_confirm_mine(callback: CallbackQuery) -> None:
 async def cb_edit_mine(callback: CallbackQuery, state: FSMContext) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) != 3 or parts[2] not in _EDIT_FIELDS or not _CARD_ID_RE.match(parts[1]):
-        await callback.answer("Кнопка устарела — открой «Мои карточки» заново.", show_alert=True)
+        await callback.answer("Кнопка устарела — открой «Личный кабинет» заново.", show_alert=True)
         return
     cid, field = parts[1], parts[2]
     try:
@@ -1113,7 +1165,7 @@ async def mine_value(message: Message, state: FSMContext) -> None:
         cards = await asyncio.to_thread(sheets_writer.find_my_cards, username)
         card = next((c for c in cards if votes.card_id(c) == cid), None)
         if card is None:
-            raise sheets_writer.CardUpdateError("Карточка изменилась — открой «Мои карточки» заново.")
+            raise sheets_writer.CardUpdateError("Карточка изменилась — открой «Личный кабинет» заново.")
         reason = await asyncio.to_thread(
             _check_forbidden_topic,
             value if field == "category" else str(card.get("Направление", "")),
