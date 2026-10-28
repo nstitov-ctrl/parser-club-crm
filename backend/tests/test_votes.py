@@ -277,6 +277,52 @@ class MyCards(unittest.TestCase):
         self.assertEqual(updated["Направление"], "Спорт")
         self.assertEqual(led.user_state(USER["id"])["votes"], {votes.card_key(updated): 1})
 
+    def test_author_delete_is_soft_hidden_everywhere_and_keeps_the_row(self):
+        cid = self.add("@ivan_test", "Массаж"); self.add("@other_one", "Йога")
+        with self.assertRaises(self.sw.CardUpdateError):
+            self.sw.delete_my_card(cid, "intruder")                         # someone else can't delete it
+        self.assertEqual(len(self.sw.list_cards_with_rows()), 2)
+        self.sw.delete_my_card(cid, "Ivan_Test")
+        self.assertEqual([c["Ник"] for c in self.sw.list_cards_with_rows()], ["@other_one"])
+        self.assertEqual(self.sw.find_my_cards("ivan_test"), [])
+        self.assertEqual(len(self.ws.rows), 3, "the row is still in the sheet")
+        self.assertTrue(self.cell(2, "Удалить?").startswith("УДАЛЕНО автором"))
+        self.assertEqual(self.sw.list_cards_with_rows()[0]["_row"], 3, "remaining cards keep their true row")
+        with self.assertRaises(self.sw.CardUpdateError):                    # already gone
+            self.sw.update_my_card(cid, "ivan_test", {})
+
+    def test_after_deleting_the_author_can_create_the_category_again(self):
+        cid = self.add("@ivan_test", "Массаж")
+        self.assertTrue(self.sw.has_card_in_category("ivan_test", "массаж"))
+        self.sw.delete_my_card(cid, "ivan_test")
+        self.assertFalse(self.sw.has_card_in_category("ivan_test", "массаж"))
+
+    def test_admin_cleanup_mark_does_not_hide_a_card(self):
+        self.add("@ivan_test", "Массаж"); self.ws.rows[1][self.sw.HEADER.index("Удалить?")] = "УДАЛИТЬ"
+        self.assertEqual(len(self.sw.list_cards_with_rows()), 1)
+
+    def test_create_card_from_the_app_is_verified_and_row_matches_header(self):
+        from app import authoring
+        authoring.create_card(self.ws, self.sw.list_cards_with_rows(), {"id": 77, "username": "New_Author"},
+                              "йога", "Анна", "Занятия йогой", self.sw.normalize_category)
+        row = self.ws.rows[1]
+        self.assertEqual(len(row), len(self.sw.HEADER))
+        self.assertEqual((row[0], row[3], row[1]), ("@new_author", "Йога", "Анна"))   # nick, normalized category, name
+        self.assertTrue(votes.is_verified(self.sw.list_cards_with_rows()[0]))
+        self.assertEqual(self.cell(2, "ID автора"), 77)
+        with self.assertRaises(authoring.CardUpdateError):                   # same category again
+            authoring.create_card(self.ws, self.sw.list_cards_with_rows(), {"id": 77, "username": "new_author"},
+                                  "Йога", "Анна", "ещё раз", self.sw.normalize_category)
+        with self.assertRaises(authoring.CardUpdateError):                   # no @username
+            authoring.create_card(self.ws, self.sw.list_cards_with_rows(), {"id": 5, "username": None},
+                                  "Спорт", "Без ника", "текст", self.sw.normalize_category)
+
+    def test_field_limits_and_empty_values(self):
+        cid = self.add("@ivan_test", "Массаж")
+        for bad in ({"Имя": "  "}, {"Текст от автора": "x" * 1001}, {"Направление": "к" * 81}):
+            with self.assertRaises(self.sw.CardUpdateError):
+                self.sw.update_my_card(cid, "ivan_test", bad)
+
     def test_bot_added_card_is_verified_at_once(self):
         today = date.today().isoformat()
         self.sw.append_card("@ivan_test", "Иван", "", "Массаж", "текст", "", "2026-10-15", author_id=5, confirmed_on=today)

@@ -40,6 +40,8 @@ POS_COL, NEG_COL = "Отзывы +", "Отзывы -"
 CONFIRMED_COL = "Подтверждено"        # ISO date the author last confirmed/corrected the card
 AUTHOR_TEXT_COL = "Текст от автора"   # corrected text — shown INSTEAD of the scraped original
 VERIFIED_DAYS = 183                   # the check mark lasts ~6 months
+DELETED_COL = "Удалить?"              # holds "УДАЛИТЬ" (admin cleanup mark) or "УДАЛЕНО автором <date>"
+DELETED_PREFIX = "УДАЛЕНО"            # author deleted the card: hidden everywhere, row kept (recoverable)
 
 
 class VoteError(Exception):
@@ -99,6 +101,11 @@ def is_verified(card: dict, today: Optional[date] = None) -> bool:
     except ValueError:
         return False
     return ((today or _now().date()) - confirmed) <= timedelta(days=VERIFIED_DAYS)
+
+
+def is_deleted(card: dict) -> bool:
+    """The author deleted this card — it stays in the sheet but is hidden everywhere."""
+    return str(card.get(DELETED_COL) or "").strip().upper().startswith(DELETED_PREFIX)
 
 
 def display_text(card: dict) -> str:

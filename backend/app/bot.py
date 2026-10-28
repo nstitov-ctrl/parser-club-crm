@@ -651,6 +651,17 @@ async def add_save(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
+    if username and await asyncio.to_thread(
+        sheets_writer.has_card_in_category, username, data["category"]
+    ):
+        await state.clear()
+        await callback.message.edit_text(
+            "У тебя уже есть объявление в этой категории. Открой «Личный кабинет» и измени его."
+        )
+        await callback.message.answer("Что дальше?", reply_markup=_MAIN_MENU)
+        await callback.answer()
+        return
+
     sheets_writer.append_card(
         nickname=nickname,
         first_name=data["name"],
@@ -1019,6 +1030,7 @@ def _mine_edit_buttons(cid: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📂 Категория", callback_data=f"em:{cid}:category"),
                 InlineKeyboardButton(text="📝 Текст", callback_data=f"em:{cid}:text"),
             ],
+            [InlineKeyboardButton(text="🗑 Удалить объявление", callback_data=f"dl:{cid}")],
             [InlineKeyboardButton(text="↩️ Назад", callback_data=f"bk:{cid}")],
         ]
     )
@@ -1102,6 +1114,48 @@ async def cb_edit_menu(callback: CallbackQuery) -> None:
     except Exception:
         logger.debug("edit menu unchanged", exc_info=True)
     await callback.answer("Что изменить?")
+
+
+@router.callback_query(F.data.startswith("dl:"))
+async def cb_delete_ask(callback: CallbackQuery) -> None:
+    """"🗑 Удалить объявление" — asks for confirmation before anything is removed."""
+    cid = (callback.data or "")[3:]
+    if not _CARD_ID_RE.match(cid):
+        await callback.answer("Кнопка устарела — открой «Личный кабинет» заново.", show_alert=True)
+        return
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Да, удалить", callback_data=f"dy:{cid}")],
+            [InlineKeyboardButton(text="↩️ Нет, оставить", callback_data=f"bk:{cid}")],
+        ]
+    )
+    try:
+        await callback.message.edit_reply_markup(reply_markup=markup)
+    except Exception:
+        logger.debug("delete confirmation unchanged", exc_info=True)
+    await callback.answer("Удалить объявление? Оно пропадёт из поиска.")
+
+
+@router.callback_query(F.data.startswith("dy:"))
+async def cb_delete_do(callback: CallbackQuery) -> None:
+    cid = (callback.data or "")[3:]
+    if not _CARD_ID_RE.match(cid):
+        await callback.answer("Кнопка устарела — открой «Личный кабинет» заново.", show_alert=True)
+        return
+    try:
+        await asyncio.to_thread(sheets_writer.delete_my_card, cid, callback.from_user.username)
+    except sheets_writer.CardUpdateError as err:
+        await callback.answer(str(err), show_alert=True)
+        return
+    except Exception:
+        logger.exception("failed to delete card")
+        await callback.answer("Не получилось удалить, попробуй позже.", show_alert=True)
+        return
+    try:
+        await callback.message.edit_text("🗑 Объявление удалено.")
+    except Exception:
+        logger.debug("delete message unchanged", exc_info=True)
+    await callback.answer("Объявление удалено")
 
 
 @router.callback_query(F.data.startswith("bk:"))

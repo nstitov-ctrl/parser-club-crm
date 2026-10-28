@@ -94,6 +94,25 @@
   }
   .vote.locked { opacity: 0.45; }
   .vote.mine { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .hero { position: relative; }
+  .cab-btn { position: absolute; top: 18px; right: 0; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
+    padding: 8px 12px; border-radius: 999px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); }
+  .cab-head { text-align: center; margin: 8px 0 16px; }
+  .cab-title { font-weight: 800; font-size: 22px; }
+  .cab-sub { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
+  .field-label { display: block; margin-top: 12px; font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+  .field { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 16px; padding: 12px 14px;
+    border: 2px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink); outline: none; }
+  .field:focus { border-color: var(--marigold); }
+  textarea.field { min-height: 130px; resize: vertical; }
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .row-actions .btn, .ghost { padding: 11px 16px; font-size: 14px; }
+  .ghost { font: inherit; font-weight: 700; cursor: pointer; border-radius: 14px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); }
+  .danger { font: inherit; font-weight: 700; font-size: 14px; cursor: pointer; padding: 11px 16px; border-radius: 14px;
+    border: 1.5px solid var(--hibiscus); background: #fff; color: var(--hibiscus); }
+  .danger.solid { background: var(--hibiscus); color: #fff; }
+  .cab-create { display: block; width: 100%; padding: 15px; margin: 4px 0 12px; font-size: 15px; }
+  .mine-note { margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
   .vbadge { display: inline-block; margin-left: 6px; vertical-align: -3px; line-height: 0; }
   .more-results { display: block; width: 100%; margin: 4px 0 12px; padding: 14px; font: inherit; font-weight: 700;
     font-size: 15px; color: var(--ink); background: var(--card); border: 1.5px solid var(--line); border-radius: 14px; cursor: pointer; }
@@ -122,11 +141,13 @@
 </head>
 <body>
 <header class="hero">
+  <button class="cab-btn hidden" id="cab-btn" type="button">👤 Личный кабинет</button>
   <img class="logo" src="/logo.png" alt="CariOra" width="104" height="104">
   <div class="brand">Car-i-<span>Ora</span></div>
   <div class="tagline">Человек ищет человека</div>
 </header>
 
+<div id="search-view">
 <form class="search" id="search-form">
   <input id="q" type="search" placeholder="опишите человека" enterkeyhint="search" autocomplete="off">
   <button class="go" type="submit" aria-label="Найти">Найти</button>
@@ -137,6 +158,9 @@
 
 <div id="meta" class="meta hidden"></div>
 <div id="results"></div>
+</div>
+
+<div id="cabinet-view" class="hidden"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -409,6 +433,120 @@ function renderCard(item) {
   );
 }
 
+/* ---- Личный кабинет: your own ads (matched by your Telegram @username) ---- */
+let inCabinet = false;
+
+function showView(cabinet) {
+  inCabinet = cabinet;
+  $('search-view').classList.toggle('hidden', cabinet);
+  $('cabinet-view').classList.toggle('hidden', !cabinet);
+  $('cab-btn').textContent = cabinet ? '← Поиск' : '👤 Личный кабинет';
+  window.scrollTo(0, 0);
+  if (cabinet) loadCabinet();
+}
+$('cab-btn').addEventListener('click', () => showView(!inCabinet));
+
+async function loadCabinet() {
+  const box = $('cabinet-view');
+  box.replaceChildren(el('div', { class: 'skeleton' }), el('div', { class: 'skeleton' }));
+  try {
+    renderCabinet(await api('/api/me/cards'));
+  } catch (e) {
+    box.replaceChildren(el('div', { class: 'state' }, el('b', { text: 'Не получилось загрузить' }), e.message));
+  }
+}
+
+function renderCabinet(data) {
+  const box = $('cabinet-view');
+  const head = el('div', { class: 'cab-head' }, el('div', { class: 'cab-title', text: 'Личный кабинет' }),
+    data.username ? el('div', { class: 'cab-sub', text: '@' + data.username }) : null);
+  const list = el('div', {});
+  if (!data.username) {
+    list.append(el('div', { class: 'state' }, el('b', { text: 'Не указан username' }),
+      'Объявления привязываются к нику в Telegram. Укажите его в настройках Telegram и откройте приложение заново.'));
+  } else if (!data.items.length) {
+    list.append(el('div', { class: 'state' }, el('b', { text: 'Объявлений с этим ником пока нет' }),
+      'Создайте первое — оно сразу получит галочку.'));
+  }
+  for (const item of data.items) list.append(renderMine(item));
+  const create = data.can_create ? el('button', {
+    class: 'btn cab-create', type: 'button', text: '➕ Создать новую',
+    onclick: () => { create.classList.add('hidden'); list.append(renderEditor(null, () => { create.classList.remove('hidden'); }, loadCabinet)); },
+  }) : null;
+  box.replaceChildren(head, list, create);
+}
+
+// Fields of the edit/create form. Returns the card element; `onCancel` restores the previous state.
+function renderEditor(item, onCancel, onSaved) {
+  const name = el('input', { class: 'field', type: 'text', maxlength: '120', placeholder: 'Имя или название' });
+  const category = el('input', { class: 'field', type: 'text', maxlength: '80', placeholder: 'Например: «психология», «аренда байков»' });
+  const text = el('textarea', { class: 'field', maxlength: '1000', placeholder: 'Расскажите, чем вы полезны (до 1000 символов)' });
+  if (item) { name.value = item.name; category.value = item.category; text.value = item.text; }
+  const save = el('button', { class: 'btn', type: 'button', text: item ? 'Сохранить' : 'Опубликовать' });
+  const cancel = el('button', { class: 'ghost', type: 'button', text: 'Отмена', onclick: () => { card.remove(); onCancel(); } });
+  const card = el('article', { class: 'card' },
+    el('label', { class: 'field-label', text: 'Имя или название' }), name,
+    el('label', { class: 'field-label', text: 'Категория' }), category,
+    el('label', { class: 'field-label', text: 'Описание' }), text,
+    el('div', { class: 'row-actions' }, save, cancel));
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    try {
+      if (item) {
+        const r = await post('/api/me/update', { id: item.id, name: name.value, category: category.value, text: text.value });
+        Object.assign(item, r.item);
+        toast('Сохранено — карточка подтверждена');
+      } else {
+        await post('/api/me/create', { name: name.value, category: category.value, text: text.value });
+        toast('Опубликовано');
+      }
+      card.remove(); onSaved(item);
+    } catch (e) { notify(e.message); save.disabled = false; }
+  });
+  return card;
+}
+
+function renderMine(item) {
+  const card = el('article', { class: 'card' });
+  const draw = (mode = 'view') => {
+    if (mode === 'edit') {
+      const editor = renderEditor(item, () => draw('view'), () => draw('view'));
+      const del = el('button', { class: 'danger', type: 'button', text: '🗑 Удалить объявление', onclick: () => draw('confirm-delete') });
+      editor.querySelector('.row-actions').append(del);
+      card.replaceChildren(...editor.childNodes);
+      return;
+    }
+    if (mode === 'confirm-delete') {
+      card.replaceChildren(
+        el('div', { class: 'name', text: item.name }),
+        el('div', { class: 'text', text: 'Удалить объявление? Оно пропадёт из поиска.' }),
+        el('div', { class: 'row-actions' },
+          el('button', { class: 'danger solid', type: 'button', text: 'Да, удалить', onclick: async (e) => {
+            e.target.disabled = true;
+            try { await post('/api/me/delete', { id: item.id }); card.remove(); toast('Объявление удалено'); }
+            catch (err) { notify(err.message); e.target.disabled = false; }
+          } }),
+          el('button', { class: 'ghost', type: 'button', text: 'Нет, оставить', onclick: () => draw('edit') })));
+      return;
+    }
+    const confirmBtn = el('button', { class: 'btn', type: 'button', text: '✅ Подтвердить', onclick: async (e) => {
+      e.target.disabled = true;
+      try { const r = await post('/api/me/confirm', { id: item.id }); Object.assign(item, r.item); toast('Карточка подтверждена'); draw('view'); }
+      catch (err) { notify(err.message); e.target.disabled = false; }
+    } });
+    card.replaceChildren(
+      el('div', { class: 'card-head' },
+        el('div', {}, el('div', { class: 'name' }, item.name, item.verified ? verifiedBadge() : null),
+          el('span', { class: 'tag', text: item.category }))),
+      el('div', { class: 'text clamp', text: item.text }),
+      item.verified ? null : el('div', { class: 'mine-note', text: 'Не подтверждено — подтвердите, и рядом с именем появится галочка' }),
+      el('div', { class: 'row-actions' }, confirmBtn,
+        el('button', { class: 'ghost', type: 'button', text: '✏️ Изменить', onclick: () => draw('edit') })));
+  };
+  draw();
+  return card;
+}
+
 /* ---- init ---- */
 $('search-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -425,6 +563,7 @@ $('search-form').addEventListener('submit', (e) => {
     showState('Откройте в Telegram', 'Это мини-приложение работает только внутри Telegram — откройте его из бота @CariOra_bot.');
     return;
   }
+  $('cab-btn').classList.remove('hidden');   // signed in through Telegram → the cabinet is available
   try {
     const total = await loadCategories();
     showState(`${total} ${plural(total, 'специалист', 'специалиста', 'специалистов')} в базе`,

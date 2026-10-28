@@ -16,7 +16,7 @@ from typing import Optional
 import gspread
 from google.oauth2.service_account import Credentials
 
-from app import votes
+from app import authoring, votes
 from app.config import settings
 
 _SCOPES = [
@@ -177,7 +177,7 @@ def list_cards() -> list[dict]:
     category search). Cheap enough for the expected table size; if it grows
     large this should move to a real cached store instead of a live read."""
     worksheet = _get_worksheet()
-    return worksheet.get_all_records()
+    return [r for r in worksheet.get_all_records() if not votes.is_deleted(r)]
 
 
 def list_cards_with_rows() -> list[dict]:
@@ -189,7 +189,9 @@ def list_cards_with_rows() -> list[dict]:
     records = worksheet.get_all_records()
     for i, record in enumerate(records, start=2):  # row 1 is the header
         record["_row"] = i
-    return records
+    # rows the author deleted stay in the sheet but are hidden everywhere
+    # ("_row" was assigned first, so the remaining cards keep their true row)
+    return [r for r in records if not votes.is_deleted(r)]
 
 
 def append_card(
@@ -226,81 +228,28 @@ def append_card(
     )
 
 
-# ---- "Мои карточки": author verification by @nick ----------------------
+# ---- Личный кабинет: author actions by @nick (rules live in app/authoring.py) ----
 
-def _norm_nick(value: object) -> str:
-    return str(value or "").strip().lstrip("@").lower()
+CardUpdateError = authoring.CardUpdateError
 
 
 def find_my_cards(username: Optional[str]) -> list[dict]:
-    """Cards whose "Ник" equals the caller's Telegram @username (case-insensitive).
-    Verification is by nick only: whoever writes to the bot from that @username
-    is treated as the card's author."""
-    me = _norm_nick(username)
-    if not me:
-        return []
-    return [c for c in list_cards_with_rows() if _norm_nick(c.get("Ник")) == me]
-
-
-class CardUpdateError(Exception):
-    """Refusal with a message that is safe to show to the user."""
+    """The caller's visible cards (matched by "Ник" only)."""
+    return authoring.find_my_cards(list_cards_with_rows(), username)
 
 
 def update_my_card(card_id: str, username: Optional[str], changes: dict[str, str]) -> dict:
-    """Confirms (empty `changes`) or corrects one of the caller's cards and stamps
-    today's date in "Подтверждено". Allowed keys: Имя, Направление, Текст от автора.
-    Re-reads the sheet, so a stale row number can never hit the wrong card."""
-    allowed = {"Имя", "Направление", votes.AUTHOR_TEXT_COL}
-    if set(changes) - allowed:
-        raise CardUpdateError("Это поле менять нельзя.")
-    cards = list_cards_with_rows()
-    card = next((c for c in cards if votes.card_id(c) == card_id), None)
-    if card is None:
-        raise CardUpdateError("Карточка изменилась — открой «Личный кабинет» заново.")
-    if not _norm_nick(username) or _norm_nick(card.get("Ник")) != _norm_nick(username):
-        raise CardUpdateError("Эта карточка привязана к другому нику.")
-
-    old_key = votes.card_key(card)
-    updated = dict(card, **changes)
-    new_key = votes.card_key(updated)
-    if new_key != old_key and any(votes.card_key(c) == new_key for c in cards if c["_row"] != card["_row"]):
-        raise CardUpdateError("У тебя уже есть карточка в этой категории.")
-
-    today = dt.date.today().isoformat()
-    ws = _get_worksheet()
-    header = ws.row_values(1)
-    cells = [gspread.Cell(card["_row"], header.index(k) + 1, v) for k, v in changes.items()]
-    cells.append(gspread.Cell(card["_row"], header.index(votes.CONFIRMED_COL) + 1, today))
-    ws.update_cells(cells, value_input_option="RAW")
-    if new_key != old_key:
-        get_ledger().migrate_key(old_key, new_key)      # votes/contacts keep following the card
-    updated[votes.CONFIRMED_COL] = today
-    return updated
+    """Confirms (empty `changes`) or corrects one of the caller's cards."""
+    return authoring.update_card(_get_worksheet(), get_ledger(), list_cards_with_rows(), card_id, username, changes)
 
 
-def set_category(row: int, category: str) -> None:
-    """Overwrites the Направление cell for one sheet row. One HTTP request
-    per call — fine for a single ad-hoc rename, but the Sheets API write
-    quota (per-minute, per-user) is easy to blow through renaming dozens
-    of rows this way. Bulk renames (category_cleanup.py) should use
-    set_categories_batch() instead."""
-    worksheet = _get_worksheet()
-    col_idx = HEADER.index("Направление") + 1
-    worksheet.update_cell(row, col_idx, category)
+def delete_my_card(card_id: str, username: Optional[str]) -> None:
+    """Soft delete: the card is hidden everywhere, the row stays in the sheet."""
+    authoring.delete_card(_get_worksheet(), list_cards_with_rows(), card_id, username)
 
 
-def set_categories_batch(updates: dict[int, str]) -> None:
-    """Renames the Направление cell for many rows in ONE Sheets API call
-    (gspread batches Cell objects into a single values_batch_update
-    request) — set_category() one row at a time hits the per-minute write
-    quota once you're renaming dozens of rows (seen in practice cleaning
-    up ~600 cards)."""
-    if not updates:
-        return
-    worksheet = _get_worksheet()
-    col_idx = HEADER.index("Направление") + 1
-    cells = [gspread.Cell(row=row, col=col_idx, value=value) for row, value in updates.items()]
-    worksheet.update_cells(cells, value_input_option="RAW")
+def has_card_in_category(username: Optional[str], category: str) -> bool:
+    return authoring.duplicate_exists(list_cards_with_rows(), username, normalize_category(category))
 
 
 _ledger: Optional[votes.Ledger] = None

@@ -31,9 +31,14 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _match_prompt import SYSTEM_PROMPT, TOOL_SCHEMA  # noqa: E402
 from _votes import (  # noqa: E402  (generated copy of backend/app/votes.py)
-    MAX_VOTES_PER_DAY, Ledger, VoteError, card_id, card_key, display_text, is_own_card, is_verified,
-    sort_by_rating,
+    MAX_VOTES_PER_DAY, Ledger, VoteError, card_id, card_key, display_text, is_deleted, is_own_card,
+    is_verified, sort_by_rating,
 )
+from _aliases import normalize_category  # noqa: E402  (generated: same category aliases as the bot)
+from _authoring import (  # noqa: E402  (generated: author actions shared with the bot)
+    CardUpdateError, create_card, delete_card, find_my_cards, update_card,
+)
+from _forbidden import SYSTEM_PROMPT as FORBIDDEN_PROMPT, TOOL_SCHEMA as FORBIDDEN_SCHEMA  # noqa: E402
 
 logger = logging.getLogger("miniapp")
 
@@ -101,6 +106,9 @@ def _load_cards(force: bool = False) -> list[dict]:
         raise HTTPException(status_code=503, detail="Не получилось прочитать базу, попробуйте позже")
     for i, record in enumerate(records, start=2):  # row 1 is the header
         record["_row"] = i
+    # cards an author deleted stay in the sheet but are hidden everywhere
+    # ("_row" is assigned first, so the rest keep their true row)
+    records = [r for r in records if not is_deleted(r)]
     _cache.update(at=time.time(), cards=records)
     return records
 
@@ -320,3 +328,148 @@ def feedback(payload: FeedbackRequest, x_telegram_init_data: Optional[str] = Hea
         raise HTTPException(status_code=503, detail="Не получилось сохранить оценку, попробуйте позже")
     _cache["at"] = 0.0  # next read picks the new counters up
     return {"ok": True, **result}
+
+
+# ---- Личный кабинет -------------------------------------------------------
+# An author is whoever opens the app from the @username in a card's "Ник".
+# Every rule (own cards only, one card per category, soft delete, 6-month check
+# mark) lives in _authoring.py — shared with the bot.
+
+def _client() -> anthropic.Anthropic:
+    global _ai
+    if _ai is None:
+        _ai = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _ai
+
+
+def _forbidden_reason(category: str, name: str, text: str) -> Optional[str]:
+    """Same forbidden-topic check as the bot's add/edit flows. Fails open: an AI
+    hiccup shouldn't block a legitimate card."""
+    content = f"Категория: {category}\nИмя/название: {name}\nОписание: {text}"
+    try:
+        response = _client().messages.create(
+            model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+            max_tokens=200,
+            temperature=0,
+            system=FORBIDDEN_PROMPT,
+            tools=[FORBIDDEN_SCHEMA],
+            tool_choice={"type": "tool", "name": "check_forbidden_topic"},
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception:
+        logger.exception("forbidden-topic check failed, allowing (fail-open)")
+        return None
+    for block in response.content:
+        if block.type == "tool_use" and block.name == "check_forbidden_topic" and block.input.get("is_forbidden"):
+            return str(block.input.get("reason") or "запрещённая тема")
+    return None
+
+
+def _mine_public(card: dict) -> dict:
+    return {
+        "id": card_id(card),
+        "name": str(card.get("Имя") or card.get("Ник") or ""),
+        "category": _category(card),
+        "text": display_text(card),
+        "verified": is_verified(card),
+    }
+
+
+def _author_action(fn):
+    """Runs an author action; turns the shared rules' refusals into HTTP errors."""
+    try:
+        return fn()
+    except CardUpdateError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("author action failed")
+        raise HTTPException(status_code=503, detail="Не получилось сохранить, попробуйте позже")
+    finally:
+        _cache["at"] = 0.0  # search picks the change up at once
+
+
+class CardIdRequest(BaseModel):
+    id: str
+
+
+class CardEditRequest(BaseModel):
+    id: str
+    name: Optional[str] = None
+    category: Optional[str] = None
+    text: Optional[str] = None
+
+
+class CardCreateRequest(BaseModel):
+    category: str
+    name: str
+    text: str
+
+
+@app.get("/api/me/cards")
+def my_cards(x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    user = _verify_init_data(x_telegram_init_data)
+    username = user.get("username")
+    cards = _author_action(lambda: find_my_cards(_load_cards(force=True), username))
+    return {"username": username, "can_create": bool(username), "items": [_mine_public(c) for c in cards]}
+
+
+@app.post("/api/me/confirm")
+def my_confirm(payload: CardIdRequest, x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    user = _verify_init_data(x_telegram_init_data)
+    card = _author_action(lambda: update_card(
+        _get_worksheet(), _ledger(), _load_cards(force=True), payload.id, user.get("username"), {}))
+    return {"ok": True, "item": _mine_public(card)}
+
+
+@app.post("/api/me/update")
+def my_update(payload: CardEditRequest, x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    user = _verify_init_data(x_telegram_init_data)
+    username = user.get("username")
+
+    def run() -> dict:
+        cards = _load_cards(force=True)
+        mine = next((c for c in find_my_cards(cards, username) if card_id(c) == payload.id), None)
+        if mine is None:
+            raise CardUpdateError("Карточка изменилась или удалена — обновите список.")
+        changes = {}
+        if payload.name is not None:
+            changes["Имя"] = payload.name
+        if payload.category is not None:
+            changes["Направление"] = normalize_category(payload.category)
+        if payload.text is not None:
+            changes["Текст от автора"] = payload.text
+        reason = _forbidden_reason(
+            changes.get("Направление", _category(mine)),
+            changes.get("Имя", str(mine.get("Имя") or mine.get("Ник") or "")),
+            changes.get("Текст от автора", display_text(mine)),
+        )
+        if reason:
+            raise HTTPException(status_code=422, detail=f"Не получилось сохранить: похоже на запрещённую тему ({reason}).")
+        return update_card(_get_worksheet(), _ledger(), cards, payload.id, username, changes)
+
+    return {"ok": True, "item": _mine_public(_author_action(run))}
+
+
+@app.post("/api/me/delete")
+def my_delete(payload: CardIdRequest, x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    user = _verify_init_data(x_telegram_init_data)
+    _author_action(lambda: delete_card(_get_worksheet(), _load_cards(force=True), payload.id, user.get("username")))
+    return {"ok": True}
+
+
+@app.post("/api/me/create")
+def my_create(payload: CardCreateRequest, x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    user = _verify_init_data(x_telegram_init_data)
+
+    def run() -> dict:
+        category = normalize_category(payload.category)
+        reason = _forbidden_reason(category, payload.name, payload.text)
+        if reason:
+            raise HTTPException(status_code=422, detail=f"Не получилось сохранить: похоже на запрещённую тему ({reason}).")
+        return create_card(_get_worksheet(), _load_cards(force=True), user, category, payload.name,
+                           payload.text, normalize_category)
+
+    values = _author_action(run)
+    return {"ok": True, "item": {"name": values["Имя"], "category": values["Направление"]}}

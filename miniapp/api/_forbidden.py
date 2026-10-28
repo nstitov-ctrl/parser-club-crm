@@ -1,0 +1,5 @@
+# GENERATED FILE — do not edit. Source: backend/app/bot.py (forbidden-topic prompt)
+# Refresh with: python miniapp/sync_votes.py
+SYSTEM_PROMPT = 'Проверь карточку эксперта/товара для CRM на запрещённые темы: наркотики и психоактивные вещества, эскорт/интим-услуги/проституция, оружие/боеприпасы/взрывчатка, поддельные документы, финансовые пирамиды и явное мошенничество, экстремистские материалы, услуги сексуального характера в отношении несовершеннолетних, торговля краденым, взлом систем/аккаунтов. Обычные легальные услуги (массаж, психология, бизнес-консультации, аренда, обучение, тантра, телесные практики и т.д.) НЕ запрещены, даже если тема деликатная — запрещай только явные, недвусмысленные случаи. Если сомневаешься — считай, что НЕ запрещено (пропускай пограничные случаи).'
+
+TOOL_SCHEMA = {'name': 'check_forbidden_topic', 'description': 'Flags whether a service/product card touches a forbidden topic.', 'input_schema': {'type': 'object', 'properties': {'is_forbidden': {'type': 'boolean'}, 'reason': {'type': 'string', 'description': 'Short Russian reason (a few words) if forbidden, empty string otherwise.'}}, 'required': ['is_forbidden', 'reason']}}
