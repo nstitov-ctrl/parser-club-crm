@@ -117,6 +117,18 @@ _MAIN_MENU = InlineKeyboardMarkup(
     ]
 )
 
+_WELCOME_TEXT = (
+    "Привет! 👋 Я CariOra.\n\n"
+    "Я знаю на Бали очень много полезных людей и помогу тебе найти именно того, кто тебе нужен.\n"
+    "Просто нажми на кнопку 🎤 и расскажи голосом, что ты ищешь.\n"
+    "Хочешь сделать татуировку? Купить недвижимость? Найти специалиста? "
+    "Или просто душевно с кем-то поговорить?\n"
+    "Скажи мне, чего ты хочешь, — и я помогу найти твоего человека.\n"
+    "А если ты хочешь, чтобы нашли тебя, хочешь заявить о себе на этом острове — "
+    "нажми кнопку «Личный кабинет» и расскажи о себе.\n\n"
+    "CariOra. Люди находят людей. ❤️"
+)
+
 _MAX_RESULTS = 3
 _SUMMARY_LIMIT = 90  # one-line ad summary shown in search results, in chars
 _MAX_TEXT_LEN = 1000  # cap on the "Добавить" flow's description field
@@ -131,8 +143,8 @@ _AGENT_SYSTEM_PROMPT = (
     "просто нет, только список категорий с числами. Если вопрос касается "
     "существующей категории или похож на попытку что-то найти или "
     "добавить — всегда заканчивай ответ подсказкой нажать «🔍 Найти по "
-    "категории» (чтобы увидеть сами карточки) или «➕ Добавить "
-    "эксперта/товар». Отвечай кратко, по-русски, БЕЗ markdown-разметки — "
+    "категории» (чтобы увидеть сами карточки) или «👤 Личный "
+    "кабинет» (чтобы рассказать о себе). Отвечай кратко, по-русски, БЕЗ markdown-разметки — "
     "никаких **, _, `, только обычный текст, Telegram его не отрисует."
 )
 
@@ -406,12 +418,7 @@ def _cancel_keyboard() -> InlineKeyboardMarkup:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(
-        "Привет! Я CariOra — база экспертов и товаров.\n\n"
-        "Могу добавить новую карточку в базу или найти по категории. "
-        "Можно и просто спросить своими словами — например «какие категории уже есть?».",
-        reply_markup=_MAIN_MENU,
-    )
+    await message.answer(_WELCOME_TEXT, reply_markup=_MAIN_MENU)
 
 
 @router.message(Command("cancel"))
@@ -677,6 +684,17 @@ async def cb_find_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(FindCard.category)
 async def find_category(message: Message, state: FSMContext) -> None:
+    await _search_and_reply(message, state)
+
+
+async def _search_and_reply(
+    message: Message,
+    state: FSMContext,
+    no_match: Optional[Callable[[Message], Awaitable[None]]] = None,
+) -> None:
+    """The search itself. `no_match`, when given, handles an empty result instead
+    of the plain "ничего нет" — free-form messages use it to fall back to the
+    helper agent."""
     await state.clear()
     query = message.text.strip().lower()
     if not query:
@@ -708,6 +726,9 @@ async def find_category(message: Message, state: FSMContext) -> None:
         matches.sort(key=lambda c: -_match_score(str(c.get("Направление", "")).lower(), query))
 
     if not matches:
+        if no_match is not None:
+            await no_match(message)
+            return
         await message.answer(
             f"По запросу «{message.text.strip()}» пока ничего нет.", reply_markup=_MAIN_MENU
         )
@@ -1200,14 +1221,20 @@ async def mine_value(message: Message, state: FSMContext) -> None:
 
 
 @router.message(StateFilter(None))
-async def freeform_question(message: Message) -> None:
-    """Anything typed outside the add/find FSM and not a known command lands
-    here. Grounded in the real category list so it can't invent data; never
-    performs the actual search/write itself (those stay in the deterministic
-    handlers above)."""
+async def freeform_question(message: Message, state: FSMContext) -> None:
+    """Anything typed or said outside the add/find FSM and not a known command.
+    The welcome message promises "tell me what you need and I'll find your
+    person", so it is first treated as a search request; only when nothing
+    matches does the helper agent answer."""
     if not message.text:
         return
+    await _search_and_reply(message, state, no_match=_agent_answer)
 
+
+async def _agent_answer(message: Message) -> None:
+    """Helper agent for messages that found nothing. Grounded in the real
+    category list so it can't invent data; never shows cards itself (the
+    deterministic search above does that)."""
     try:
         cards = sheets_writer.list_cards()
     except Exception:
