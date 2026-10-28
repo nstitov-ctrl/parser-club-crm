@@ -45,7 +45,7 @@ logger = logging.getLogger("miniapp")
 app = FastAPI(title="CariOra Mini App API")
 
 MAX_RESULTS = 30
-CACHE_TTL = 60          # seconds the sheet is kept in memory per warm instance
+CACHE_TTL = 20          # seconds the sheet is kept in memory per warm instance (a delete in the bot shows up fast)
 INIT_DATA_MAX_AGE = 86400
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -101,7 +101,10 @@ def _load_cards(force: bool = False) -> list[dict]:
         records = _get_worksheet().get_all_records()
     except Exception:
         logger.exception("sheet read failed")
-        if _cache["cards"]:  # stale data beats an error screen
+        # Search may show slightly old data rather than an error screen, but a forced read
+        # (cabinet, edit, delete, vote) must never fall back to a stale cache: it would show
+        # — or act on — cards that were just deleted or changed.
+        if not force and _cache["cards"]:
             return _cache["cards"]
         raise HTTPException(status_code=503, detail="Не получилось прочитать базу, попробуйте позже")
     for i, record in enumerate(records, start=2):  # row 1 is the header

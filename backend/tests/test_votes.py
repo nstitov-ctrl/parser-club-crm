@@ -286,7 +286,7 @@ class MyCards(unittest.TestCase):
         self.assertEqual([c["Ник"] for c in self.sw.list_cards_with_rows()], ["@other_one"])
         self.assertEqual(self.sw.find_my_cards("ivan_test"), [])
         self.assertEqual(len(self.ws.rows), 3, "the row is still in the sheet")
-        self.assertTrue(self.cell(2, "Удалить?").startswith("УДАЛЕНО автором"))
+        self.assertEqual(self.cell(2, "Удалить?"), "УДАЛИТЬ")        # the word the owner filters by
         self.assertEqual(self.sw.list_cards_with_rows()[0]["_row"], 3, "remaining cards keep their true row")
         with self.assertRaises(self.sw.CardUpdateError):                    # already gone
             self.sw.update_my_card(cid, "ivan_test", {})
@@ -297,8 +297,13 @@ class MyCards(unittest.TestCase):
         self.sw.delete_my_card(cid, "ivan_test")
         self.assertFalse(self.sw.has_card_in_category("ivan_test", "массаж"))
 
-    def test_admin_cleanup_mark_does_not_hide_a_card(self):
-        self.add("@ivan_test", "Массаж"); self.ws.rows[1][self.sw.HEADER.index("Удалить?")] = "УДАЛИТЬ"
+    def test_any_delete_mark_hides_the_card_whoever_set_it(self):
+        col = self.sw.HEADER.index("Удалить?")
+        for mark in ("УДАЛИТЬ", " удалить ", "УДАЛЕНО автором 2026-10-28"):      # by hand, sloppy typing, legacy marker
+            self.ws.rows[1:] = []
+            self.add("@ivan_test", "Массаж"); self.ws.rows[1][col] = mark
+            self.assertEqual(self.sw.list_cards_with_rows(), [], mark)
+        self.ws.rows[1][col] = "проверить"                                          # any other note does not hide it
         self.assertEqual(len(self.sw.list_cards_with_rows()), 1)
 
     def test_create_card_from_the_app_is_verified_and_row_matches_header(self):

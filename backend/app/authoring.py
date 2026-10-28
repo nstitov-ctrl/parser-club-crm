@@ -9,9 +9,9 @@ category / text, delete it, or create a new one:
     mark lasts ~6 months, see votes.is_verified);
   * a corrected text lives in "Текст от автора" and is shown INSTEAD of the
     scraped original, which stays untouched;
-  * deleting is soft: "Удалить?" gets "УДАЛЕНО автором <date>", the card
-    disappears from search/cabinet, the row stays in the sheet (recoverable;
-    removing rows for good remains a manual job);
+  * deleting is soft: "Удалить?" gets "УДАЛИТЬ", the card disappears from
+    search/cabinet/app at once, the row stays in the sheet (recoverable; the
+    owner filters the column and removes rows by hand);
   * one author + one category = one card (the project's dedup rule).
 
 Worksheet access is passed in (no imports of config/credentials), so this file
@@ -118,8 +118,7 @@ def delete_card(
     card = _own_card(cards, card_id, username)
     header = ws.row_values(1)
     ws.update_cells(
-        [gspread.Cell(card["_row"], header.index(votes.DELETED_COL) + 1,
-                      f"{votes.DELETED_PREFIX} автором {_today()}")],
+        [gspread.Cell(card["_row"], header.index(votes.DELETED_COL) + 1, votes.DELETE_MARK)],
         value_input_option="RAW",
     )
 

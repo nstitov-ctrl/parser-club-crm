@@ -43,12 +43,13 @@
     background: var(--card); color: var(--ink); outline: none;
   }
   .search input:focus { border-color: var(--marigold); }
-  .go {                                  /* round "Найти" button, centred under the field */
-    display: block; width: 76px; height: 76px; margin: 14px auto 0; border: 0; border-radius: 50%;
-    background: var(--marigold); color: var(--ink); font: inherit; font-weight: 800; font-size: 15px;
-    cursor: pointer; box-shadow: 0 4px 14px rgba(242, 169, 0, 0.35);
-  }
-  .go:active { transform: scale(0.96); }
+  /* Two elongated buttons under the field, together exactly as wide as it, same height as it:
+     "Личный кабинет" (white, outlined) on the left, the smaller yellow "Найти" on the right. */
+  .search-actions { display: flex; gap: 10px; margin-top: 12px; }
+  .search-actions button { height: 57px; border-radius: 16px; font: inherit; font-weight: 800; cursor: pointer; }
+  .cab { flex: 1.7; background: #fff; color: var(--ink); border: 2px solid var(--line); font-size: 15px; }
+  .go { flex: 1; border: 0; background: var(--marigold); color: var(--ink); font-size: 16px; }
+  .search-actions button:active { transform: scale(0.98); }
   .btn {
     font: inherit; font-weight: 700; border: 0; border-radius: 14px; cursor: pointer;
     padding: 0 18px; background: var(--marigold); color: var(--ink);
@@ -95,8 +96,7 @@
   .vote.locked { opacity: 0.45; }
   .vote.mine { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .hero { position: relative; }
-  .cab-btn { position: absolute; top: 18px; right: 0; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer;
-    padding: 8px 12px; border-radius: 999px; border: 1.5px solid var(--line); background: #fff; color: var(--ink); }
+  .back-btn { padding: 9px 14px; font-size: 13px; margin-top: 4px; }
   .cab-head { text-align: center; margin: 8px 0 16px; }
   .cab-title { font-weight: 800; font-size: 22px; }
   .cab-sub { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
@@ -141,7 +141,6 @@
 </head>
 <body>
 <header class="hero">
-  <button class="cab-btn hidden" id="cab-btn" type="button">👤 Личный кабинет</button>
   <img class="logo" src="/logo.png" alt="CariOra" width="104" height="104">
   <div class="brand">Car-i-<span>Ora</span></div>
   <div class="tagline">Человек ищет человека</div>
@@ -150,7 +149,10 @@
 <div id="search-view">
 <form class="search" id="search-form">
   <input id="q" type="search" placeholder="опишите человека" enterkeyhint="search" autocomplete="off">
-  <button class="go" type="submit" aria-label="Найти">Найти</button>
+  <div class="search-actions">
+    <button class="cab hidden" id="cab-btn" type="button">👤 Личный кабинет</button>
+    <button class="go" type="submit" aria-label="Найти">Найти</button>
+  </div>
 </form>
 
 <div class="chips" id="chips"></div>
@@ -160,7 +162,10 @@
 <div id="results"></div>
 </div>
 
-<div id="cabinet-view" class="hidden"></div>
+<div id="cabinet-view" class="hidden">
+  <button class="ghost back-btn" id="back-btn" type="button">← К поиску</button>
+  <div id="cabinet-body"></div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -440,14 +445,14 @@ function showView(cabinet) {
   inCabinet = cabinet;
   $('search-view').classList.toggle('hidden', cabinet);
   $('cabinet-view').classList.toggle('hidden', !cabinet);
-  $('cab-btn').textContent = cabinet ? '← Поиск' : '👤 Личный кабинет';
   window.scrollTo(0, 0);
   if (cabinet) loadCabinet();
 }
-$('cab-btn').addEventListener('click', () => showView(!inCabinet));
+$('cab-btn').addEventListener('click', () => showView(true));
+$('back-btn').addEventListener('click', () => showView(false));
 
 async function loadCabinet() {
-  const box = $('cabinet-view');
+  const box = $('cabinet-body');
   box.replaceChildren(el('div', { class: 'skeleton' }), el('div', { class: 'skeleton' }));
   try {
     renderCabinet(await api('/api/me/cards'));
@@ -457,7 +462,7 @@ async function loadCabinet() {
 }
 
 function renderCabinet(data) {
-  const box = $('cabinet-view');
+  const box = $('cabinet-body');
   const head = el('div', { class: 'cab-head' }, el('div', { class: 'cab-title', text: 'Личный кабинет' }),
     data.username ? el('div', { class: 'cab-sub', text: '@' + data.username }) : null);
   const list = el('div', {});

@@ -40,8 +40,9 @@ POS_COL, NEG_COL = "Отзывы +", "Отзывы -"
 CONFIRMED_COL = "Подтверждено"        # ISO date the author last confirmed/corrected the card
 AUTHOR_TEXT_COL = "Текст от автора"   # corrected text — shown INSTEAD of the scraped original
 VERIFIED_DAYS = 183                   # the check mark lasts ~6 months
-DELETED_COL = "Удалить?"              # holds "УДАЛИТЬ" (admin cleanup mark) or "УДАЛЕНО автором <date>"
-DELETED_PREFIX = "УДАЛЕНО"            # author deleted the card: hidden everywhere, row kept (recoverable)
+DELETED_COL = "Удалить?"              # the "delete me" column; rows are removed from the sheet by hand
+DELETE_MARK = "УДАЛИТЬ"               # written when the author deletes a card (or an admin marks one)
+LEGACY_DELETE_PREFIX = "УДАЛЕНО"      # older marker "УДАЛЕНО автором <date>" — still hidden
 
 
 class VoteError(Exception):
@@ -104,8 +105,10 @@ def is_verified(card: dict, today: Optional[date] = None) -> bool:
 
 
 def is_deleted(card: dict) -> bool:
-    """The author deleted this card — it stays in the sheet but is hidden everywhere."""
-    return str(card.get(DELETED_COL) or "").strip().upper().startswith(DELETED_PREFIX)
+    """Marked "УДАЛИТЬ" (by the author's delete, or by hand): hidden from search,
+    cabinet and the app, while the row stays in the sheet until it is removed manually."""
+    mark = str(card.get(DELETED_COL) or "").strip().upper()
+    return mark.startswith(DELETE_MARK) or mark.startswith(LEGACY_DELETE_PREFIX)
 
 
 def display_text(card: dict) -> str:
