@@ -88,23 +88,32 @@ async def _voice_transcription_middleware(
     flow below (FSM steps, find, free-form question) can just read
     message.text as usual — it never needs to know voice exists."""
     if event.voice is not None:
+        text = ""
+        error_code = None
         try:
             bot: Bot = data["bot"]
             file = await bot.get_file(event.voice.file_id)
             buffer = await bot.download_file(file.file_path)
             text = await asyncio.to_thread(voice.transcribe, buffer.read())
-        except Exception:
+        except voice.VoiceError as exc:
+            error_code = exc.code
+        except Exception as exc:
             # get_file/download_file aren't wrapped anywhere else — an
             # unhandled exception here used to propagate out of the
             # middleware entirely (aiogram just logs it, no reply to the
             # user at all: looked like "voice message ignored, nothing
-            # happened"). Now it degrades to the same fallback as a failed
-            # transcription instead of going silent.
-            logger.exception("voice download/transcription pipeline failed")
-            text = None
+            # happened"). Now it degrades to a reply instead of going silent.
+            logger.exception("voice download pipeline failed")
+            error_code = f"download:{type(exc).__name__}"
+        if error_code:
+            await event.answer(
+                "Голосовой ввод сейчас не работает — напиши текстом, пожалуйста. "
+                f"(код: {error_code})"
+            )
+            return None
         if not text:
             await event.answer(
-                "Не удалось распознать голосовое — попробуй ещё раз или напиши текстом."
+                "Не расслышал — скажи чуть громче и подольше или напиши текстом."
             )
             return None
         event = event.model_copy(update={"text": text})
@@ -1356,6 +1365,9 @@ async def run() -> None:
     bot = Bot(token=settings.telegram_bot_token)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
+    # Load the speech model in the background so the first voice note after a
+    # (re)start doesn't wait for it; polling starts immediately.
+    asyncio.create_task(asyncio.to_thread(voice.preload))
     while True:
         try:
             await dp.start_polling(bot)

@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt"
+    "buildCommand": "pip install -r requirements.txt && (python -c \"from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8')\" || true)"
   },
   "deploy": {
     "startCommand": "python bot_main.py",
