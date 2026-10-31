@@ -30,6 +30,9 @@ assert "from app import votes" in authoring
 authoring = authoring.replace("from app import votes", "import _votes as votes")
 (out / "_authoring.py").write_text(banner("authoring.py") + authoring, encoding="utf-8")
 
+# 2b) usage log ("Пользователи" tab): imports nothing from the project, copied as-is
+(out / "_usage.py").write_text(banner("usage.py") + (app / "usage.py").read_text(encoding="utf-8"), encoding="utf-8")
+
 # 3) category normalisation: CATEGORY_ALIASES + normalize_category, cut out of sheets_writer.py
 #    (that module can't be imported on Vercel: it needs config/credentials and a writable data/ dir)
 src = (app / "sheets_writer.py").read_text(encoding="utf-8")
@@ -58,4 +61,4 @@ assert len(consts) == 2, "forbidden-topic constants not found in bot.py"
     + f"SYSTEM_PROMPT = {consts['_FORBIDDEN_CHECK_SYSTEM_PROMPT']!r}\n\nTOOL_SCHEMA = {consts['_FORBIDDEN_CHECK_TOOL_SCHEMA']!r}\n",
     encoding="utf-8",
 )
-print("synced: _votes.py, _authoring.py, _aliases.py, _forbidden.py")
+print("synced: _votes.py, _authoring.py, _usage.py, _aliases.py, _forbidden.py")

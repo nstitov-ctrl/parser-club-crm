@@ -34,6 +34,7 @@ from _votes import (  # noqa: E402  (generated copy of backend/app/votes.py)
     MAX_VOTES_PER_DAY, Ledger, VoteError, card_id, card_key, display_text, is_deleted, is_own_card,
     is_verified, sort_by_rating,
 )
+from _usage import SOURCE_APP, UsageLog  # noqa: E402  (generated: the "Пользователи" tab shared with the bot)
 from _aliases import normalize_category  # noqa: E402  (generated: same category aliases as the bot)
 from _authoring import (  # noqa: E402  (generated: author actions shared with the bot)
     CardUpdateError, create_card, delete_card, find_my_cards, update_card,
@@ -226,6 +227,24 @@ def _dedupe(cards: list[dict]) -> list[dict]:
             seen.add(key)
         out.append(card)
     return out
+
+
+_usage_obj: Optional[UsageLog] = None
+
+
+@app.post("/api/hello")
+def hello(x_telegram_init_data: Optional[str] = Header(None)) -> dict:
+    """Called once per app session: counts the open in the "Пользователи" tab.
+    Never fails the app — statistics are not worth an error screen."""
+    global _usage_obj
+    user = _verify_init_data(x_telegram_init_data)
+    try:
+        if _usage_obj is None:
+            _usage_obj = UsageLog(_get_worksheet)
+        _usage_obj.record_now(user, SOURCE_APP, opens=1)
+    except Exception:
+        logger.exception("usage logging failed")
+    return {"ok": True}
 
 
 @app.get("/api/categories")

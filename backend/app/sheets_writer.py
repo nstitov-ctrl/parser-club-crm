@@ -16,7 +16,7 @@ from typing import Optional
 import gspread
 from google.oauth2.service_account import Credentials
 
-from app import authoring, votes
+from app import authoring, usage, votes
 from app.config import settings
 
 _SCOPES = [
@@ -253,6 +253,17 @@ def has_card_in_category(username: Optional[str], category: str) -> bool:
 
 
 _ledger: Optional[votes.Ledger] = None
+
+
+_usage_log: Optional[usage.UsageLog] = None
+
+
+def get_usage() -> usage.UsageLog:
+    """Who uses the service ("Пользователи" tab, see app/usage.py)."""
+    global _usage_log
+    if _usage_log is None:
+        _usage_log = usage.UsageLog(_get_worksheet)
+    return _usage_log
 
 
 def get_ledger() -> votes.Ledger:

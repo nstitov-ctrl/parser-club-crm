@@ -64,18 +64,64 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery,
+    ChatMemberUpdated,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
     TelegramObject,
 )
 
-from app import sheets_writer, voice, votes
+from app import sheets_writer, usage, voice, votes
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = Router()
+
+
+_USAGE_FLUSH_SECONDS = 60
+
+
+def _track(user: Any, **counts: Any) -> None:
+    """Records one event for the "Пользователи" tab. Memory only (no network):
+    the background loop in run() writes the batch to the sheet. Must never
+    break a handler, so every failure is swallowed."""
+    if user is None:
+        return
+    try:
+        sheets_writer.get_usage().add(
+            {"id": user.id, "is_bot": user.is_bot, "username": user.username,
+             "first_name": user.first_name, "last_name": user.last_name,
+             "language_code": user.language_code},
+            usage.SOURCE_BOT, **counts,
+        )
+    except Exception:
+        logger.exception("usage tracking failed")
+
+
+async def _usage_middleware(
+    handler: Callable[[Any, dict[str, Any]], Awaitable[Any]],
+    event: TelegramObject,
+    data: dict[str, Any],
+) -> Any:
+    _track(getattr(event, "from_user", None))
+    return await handler(event, data)
+
+
+router.message.outer_middleware(_usage_middleware)
+router.callback_query.outer_middleware(_usage_middleware)
+
+
+@router.my_chat_member()
+async def on_my_chat_member(event: ChatMemberUpdated) -> None:
+    """Telegram tells us when someone blocks or unblocks the bot."""
+    if event.chat.type != "private":
+        return
+    status = event.new_chat_member.status
+    if status in ("kicked", "left"):
+        _track(event.from_user, status=usage.STATUS_BLOCKED)
+    elif status == "member":
+        _track(event.from_user, status=usage.STATUS_ACTIVE)
 
 
 @router.message.middleware()
@@ -116,6 +162,7 @@ async def _voice_transcription_middleware(
                 "Не расслышал — скажи чуть громче и подольше или напиши текстом."
             )
             return None
+        _track(event.from_user, voices=1)
         event = event.model_copy(update={"text": text})
     return await handler(event, data)
 
@@ -436,6 +483,44 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await message.answer("Отменено.", reply_markup=_MAIN_MENU)
 
 
+def _build_stats_text() -> str:
+    """Blocking (several sheet reads) — call from a thread."""
+    log = sheets_writer.get_usage()
+    log.flush()                       # include what is still waiting in memory
+    s = usage.summarize(log.rows())
+    contacts = sheets_writer.get_ledger()._contacts_ws.get_all_values()[1:]
+    reached_contact = len({r[1].strip() for r in contacts if len(r) > 1 and r[1].strip()})
+    confirmed = sum(
+        1 for c in sheets_writer.list_cards() if str(c.get(votes.CONFIRMED_COL, "")).strip()
+    )
+    return (
+        "📊 CariOra — статистика\n\n"
+        f"Пользователей всего: {s['total']}\n"
+        f"Новых: за 24 ч — {s['new_1d']}, за 7 дней — {s['new_7d']}, за 30 дней — {s['new_30d']}\n"
+        f"Активных за 7 дней: {s['active_7d']}\n"
+        f"Заблокировали бота: {s['blocked']}\n"
+        f"Пришли через бот: {s['from_bot']}, через приложение: {s['from_app']}\n\n"
+        f"Поисков в боте: {s['searches']}\n"
+        f"Голосовых сообщений: {s['voices']}\n"
+        f"Открывали приложение: {s['app_users']} чел. ({s['app_opens']} открытий)\n"
+        f"Дошли до контакта: {reached_contact} чел.\n"
+        f"Карточек подтверждено авторами: {confirmed}\n\n"
+        "Учёт ведётся с 31.10.2026. Подробности — вкладка «Пользователи» в таблице."
+    )
+
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message) -> None:
+    if message.from_user is None or message.from_user.id not in settings.admin_ids:
+        return                        # not an admin: stay silent, don't reveal the command
+    try:
+        text = await asyncio.to_thread(_build_stats_text)
+    except Exception:
+        logger.exception("stats failed")
+        text = "Не получилось собрать статистику, попробуй чуть позже."
+    await message.answer(text)
+
+
 @router.callback_query(F.data == "cancel")
 async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
@@ -721,6 +806,7 @@ async def _search_and_reply(
         await message.answer("Пустой запрос, попробуй ещё раз.", reply_markup=_MAIN_MENU)
         return
 
+    _track(message.from_user, searches=1)
     try:
         cards = sheets_writer.list_cards_with_rows()
     except Exception:
@@ -1352,6 +1438,16 @@ async def _agent_answer(message: Message) -> None:
     await message.answer(_strip_markdown(reply), reply_markup=_MAIN_MENU)
 
 
+async def _usage_flush_loop() -> None:
+    """Writes the collected usage events to the sheet in one batch per tick."""
+    while True:
+        await asyncio.sleep(_USAGE_FLUSH_SECONDS)
+        try:
+            await asyncio.to_thread(sheets_writer.get_usage().flush)
+        except Exception:
+            logger.exception("usage flush failed — events kept, retrying next tick")
+
+
 async def run() -> None:
     """Runs polling forever. aiogram already retries on ordinary network
     blips inside start_polling, but a longer outage (e.g. the Mac sleeping
@@ -1368,6 +1464,7 @@ async def run() -> None:
     # Load the speech model in the background so the first voice note after a
     # (re)start doesn't wait for it; polling starts immediately.
     asyncio.create_task(asyncio.to_thread(voice.preload))
+    asyncio.create_task(_usage_flush_loop())
     while True:
         try:
             await dp.start_polling(bot)

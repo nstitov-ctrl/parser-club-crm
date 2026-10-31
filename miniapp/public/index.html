@@ -569,6 +569,9 @@ $('search-form').addEventListener('submit', (e) => {
     return;
   }
   $('cab-btn').classList.remove('hidden');   // signed in through Telegram → the cabinet is available
+  try {                                      // count one open per app session (fire and forget)
+    if (!sessionStorage.getItem('hello')) { sessionStorage.setItem('hello', '1'); post('/api/hello', {}).catch(() => {}); }
+  } catch (e) {}
   try {
     const total = await loadCategories();
     showState(`${total} ${plural(total, 'специалист', 'специалиста', 'специалистов')} в базе`,

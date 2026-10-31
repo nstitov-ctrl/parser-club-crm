@@ -30,6 +30,10 @@ class Settings:
     # Telegram Bot API (@CariOra_bot) — data-entry / category-lookup bot,
     # separate credential from the Telethon user account above
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    # Telegram user ids allowed to run /stats (comma-separated in ADMIN_IDS)
+    admin_ids: tuple = tuple(
+        int(x) for x in os.getenv("ADMIN_IDS", "6164827188").replace(" ", "").split(",") if x
+    )
 
     # Anthropic (stage 2 classification/extraction)
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
